@@ -285,7 +285,7 @@ class AzureFoundryProvider:
             provider_id=self._provider_id,
             usage=usage,
             estimated_cost=self.estimate_cost(request.model_id, usage),
-            finish_reason=str(choice.finish_reason) if choice.finish_reason else None,
+            finish_reason=self._to_finish_reason(choice.finish_reason),
             provider_metadata=self._provider_metadata(completion),
             model_metadata={
                 "deployment": self._deployment,
@@ -336,7 +336,7 @@ class AzureFoundryProvider:
 
                 choice = choices[0]
                 if choice.finish_reason:
-                    finish_reason = str(choice.finish_reason)
+                    finish_reason = self._to_finish_reason(choice.finish_reason)
 
                 delta = getattr(choice, "delta", None)
                 content = getattr(delta, "content", None) if delta else None
@@ -520,6 +520,31 @@ class AzureFoundryProvider:
             )
 
         return tuple(converted)
+
+    @staticmethod
+    def _to_finish_reason(reason: Any) -> str | None:  # noqa: ANN401 - SDK enum
+        """Convert the SDK's finish reason into the platform's vocabulary.
+
+        `str()` on the SDK enum yields `CompletionsFinishReason.STOPPED` — the
+        member repr, not the wire value. That string reached the public API
+        response body, putting an Azure type name in front of every client and
+        breaking provider neutrality in the one place it is most visible.
+
+        `.value` is the OpenAI-shaped vocabulary the platform already speaks
+        (`stop`, `length`, `content_filter`, `tool_calls`), so no translation
+        table is needed — only the discipline to read it instead of the repr.
+
+        Only a live call exposed this: the mock returns plain strings, so every
+        test and every local run looked correct.
+
+        An unrecognised reason passes through lowercased rather than being
+        dropped or forced to `stop`. A reason we have not seen is information;
+        inventing a successful one hides a truncated answer.
+        """
+        if not reason:
+            return None
+
+        return str(getattr(reason, "value", reason)).strip().lower()
 
     @staticmethod
     def _to_usage(usage: Any) -> TokenUsage:  # noqa: ANN401 - SDK type

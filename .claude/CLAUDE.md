@@ -8,7 +8,9 @@ The objective is not to build a chatbot.
 
 The objective is to build a reusable AI Platform capable of hosting multiple collaborating AI agents that can independently use different LLMs, tools, memory providers, knowledge sources, and execution workflows.
 
-The first implementation will use Azure AI Foundry with Gemma 4 deployed on Managed Compute with Scale-to-Zero.
+The first implementation will use Azure AI Foundry with FW-Kimi-K3.
+
+The model is a configuration choice and nothing in the source names it. Managed Compute with Scale-to-Zero remains the target hosting model where a deployment supports it.
 
 The architecture must remain provider agnostic so additional models can be added without architectural changes.
 

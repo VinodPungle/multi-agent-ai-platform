@@ -295,7 +295,7 @@ built.
 | 02 — Chat UI, session memory | Chat routes, `MemoryProvider` (in-memory) | New router in `api/v1/router.py`; memory registered in the container |
 | 03 — Agent runtime | LangGraph workflows, chat agent, registries | `runtime/`, `workflow/`, `agents/`, `registries/` skeletons |
 | 04 — Tool framework | Internet search, tool registry | `ToolProvider` protocol; `tools/` skeleton |
-| 05 — Azure AI Foundry | Gemma 4 via managed compute | `LLMProvider` protocol; `providers/` skeleton; providers initialise in the lifespan |
+| 05 — Azure AI Foundry | FW-Kimi-K3 via Foundry | `LLMProvider` protocol; `providers/` skeleton; providers initialise in the lifespan |
 | 06 — Infrastructure | Container Apps, full `azd up` | `infra/bicep`, `azure.yaml` |
 | 07 — CI/CD | Deployment pipelines | `.github/workflows` |
 | 08 — Hardening | Persistence, dashboards, budgets | `storage/`, `evaluation/`, `BudgetPolicy` |

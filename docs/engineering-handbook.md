@@ -513,13 +513,11 @@ Good:
 
 ```python
 class ChatService:
-
     def __init__(
         self,
         llm_provider: LLMProvider,
         memory_provider: MemoryProvider,
-    ):
-        ...
+    ): ...
 ```
 
 Avoid:

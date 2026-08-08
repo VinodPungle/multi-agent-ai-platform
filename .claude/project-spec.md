@@ -11,7 +11,7 @@ Status: Active
 
 Build an enterprise-grade Multi-Agent AI Platform capable of hosting multiple collaborating AI agents that can independently use different Large Language Models (LLMs), tools, memory providers, search providers, and knowledge sources.
 
-The first release will implement a production-ready AI Chat Agent running on Azure AI Foundry using Gemma 4 deployed on Managed Compute with Scale-to-Zero.
+The first release will implement a production-ready AI Chat Agent running on Azure AI Foundry using FW-Kimi-K3. The model is a configuration choice, not an architectural one: the platform names no model in source, so the first release's model can change without a code change.
 
 The platform must be cloud-native, modular, observable, secure, extensible, and provider-agnostic.
 
@@ -49,7 +49,7 @@ The initial release is considered successful when:
 
 ✓ Responses are streamed.
 
-✓ Azure AI Foundry Gemma 4 generates responses.
+✓ Azure AI Foundry FW-Kimi-K3 generates responses.
 
 ✓ Conversation memory works.
 
@@ -105,7 +105,7 @@ Initial Release includes:
 
 ✔ Azure AI Foundry
 
-✔ Gemma 4
+✔ FW-Kimi-K3
 
 ✔ Internet Search
 
@@ -278,7 +278,7 @@ The system shall support Azure AI Foundry.
 
 FR-008
 
-The system shall support Gemma 4.
+The system shall support FW-Kimi-K3, and any other Azure AI Foundry deployment, selected by configuration alone.
 
 FR-009
 
@@ -1168,9 +1168,9 @@ Milestone 5
 
 Azure AI Foundry Integration
 
-Gemma 4
+FW-Kimi-K3
 
-Managed Compute
+Model Deployment
 
 Streaming
 
@@ -1246,7 +1246,7 @@ The MVP is complete when:
 
 ✓ Azure AI Foundry integration works
 
-✓ Gemma 4 deployed successfully
+✓ FW-Kimi-K3 deployed successfully
 
 ✓ Local development works
 

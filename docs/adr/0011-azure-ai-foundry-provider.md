@@ -139,3 +139,36 @@ target, not a lowest-common-denominator one.
 **Waiting for Gemma 4 entitlement before shipping.** Would have left the platform
 with no real provider and no evidence the abstraction holds, blocked on a support
 ticket outside the repository's control.
+
+---
+
+## Update — 2026-08-08
+
+Appended rather than edited: the decisions above stand, and rewriting them would
+hide what was true when they were made.
+
+**The Gemma 4 blocker is resolved by substitution, not by entitlement.**
+`FW-Kimi-K3` (Fireworks, serverless) was deployed on a different Foundry
+resource and is now the platform's first model. Switching cost three environment
+variables and no code change — the second piece of evidence for this ADR's
+central claim, and a stronger one than the first, since it crossed subscriptions
+and model families.
+
+Two consequences of that deployment being **serverless rather than Managed
+Compute**: there is no scale-to-zero cold start to absorb, so the health-check
+argument above is unexercised here (it remains correct for deployments that do
+scale to zero); and `max_tokens` is accepted, so the `output_token_parameter`
+override is not needed for this model.
+
+**One decision above was wrong in implementation.** "No Azure type escapes" was
+asserted and not enforced: `finish_reason` was serialised with `str()` on the SDK
+enum, which yields the member repr, so `CompletionsFinishReason.STOPPED` was
+returned in the public API response body. Fixed by reading `.value`.
+
+The lesson is about enforcement, not about the rule. The violation passed code
+review, passed a full test suite, and was found only by looking at a real HTTP
+response. A checklist item cannot catch a value that is correct in every test
+because every test hands the adapter a friendlier type than the SDK does. This
+ADR's Compliance expectation should become two automated checks — an import
+check for `azure.*` outside provider packages, and a contract test asserting no
+response field carries an SDK type name.

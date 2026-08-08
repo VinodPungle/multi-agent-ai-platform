@@ -59,11 +59,11 @@ why the provider's error message says it for you.
 PLATFORM_AZURE_FOUNDRY__ENABLED=true
 PLATFORM_AZURE_FOUNDRY__ENDPOINT=https://<resource>.services.ai.azure.com/models
 PLATFORM_AZURE_FOUNDRY__DEPLOYMENT=<deployment-name>
-PLATFORM_AZURE_FOUNDRY__MODEL_ID=gemma-4
+PLATFORM_AZURE_FOUNDRY__MODEL_ID=<platform-model-id>
 
 # Point the agent at it, and turn the mock off.
 PLATFORM_AGENT__PROVIDER_ID=azure-foundry
-PLATFORM_AGENT__MODEL_ID=gemma-4
+PLATFORM_AGENT__MODEL_ID=<platform-model-id>
 PLATFORM_MOCK_PROVIDER__ENABLED=false
 ```
 
@@ -115,6 +115,15 @@ reason `DefaultAzureCredential` is used rather than a key.
 ---
 
 ## 5. Scale-to-zero
+
+**Applies to Managed Compute only.** Serverless deployments — SKU
+`GlobalStandard`, `DataZoneStandard` and similar — have no instance to start and
+none of this section applies to them. Check which you have:
+
+```bash
+az cognitiveservices account deployment list -n <resource> -g <rg> \
+  --query "[].{deployment:name,sku:sku.name}" -o table
+```
 
 A Managed Compute deployment that has scaled to zero takes **tens of seconds** to
 answer its first request while an instance starts.

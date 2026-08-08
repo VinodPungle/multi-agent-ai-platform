@@ -9,7 +9,7 @@ variables:
     required: false
 compatible_models:
   - mock-echo
-  - gemma-4
+  - fw-kimi-k3
 updated_at: 2026-08-08T00:00:00Z
 ---
 

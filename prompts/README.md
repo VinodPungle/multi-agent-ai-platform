@@ -47,7 +47,7 @@ variables:
     description: BCP 47 locale for the response.
     required: true
 compatible_models:
-  - gemma-4
+  - fw-kimi-k3
   - claude-sonnet-5
 updated_at: 2026-01-01T00:00:00Z
 ---

@@ -22,6 +22,7 @@ from types import TracebackType
 from typing import Any
 
 import pytest
+from azure.ai.inference.models import CompletionsFinishReason
 from azure.core.credentials import AccessToken
 from azure.core.exceptions import (
     ClientAuthenticationError,
@@ -632,3 +633,77 @@ class TestOutputTokenParameter:
         _ = [chunk async for chunk in provider.stream(a_request(max_output_tokens=32), CONTEXT)]
 
         assert client.calls[0]["model_extras"] == {"max_completion_tokens": 32}
+
+
+class TestFinishReasonNeutrality:
+    """The real SDK enum, not a friendly string.
+
+    These use `CompletionsFinishReason` deliberately. The original tests passed
+    a plain `"stop"`, which is what the mock returns and what every fake here
+    had been handed — so the adapter looked correct while `str(enum)` was
+    putting `CompletionsFinishReason.STOPPED` into the public API response.
+
+    A double that is more convenient than the real type does not test the
+    adapter; it tests the double.
+    """
+
+    @pytest.mark.parametrize(
+        ("sdk_reason", "expected"),
+        [
+            (CompletionsFinishReason.STOPPED, "stop"),
+            (CompletionsFinishReason.TOKEN_LIMIT_REACHED, "length"),
+            (CompletionsFinishReason.CONTENT_FILTERED, "content_filter"),
+            (CompletionsFinishReason.TOOL_CALLS, "tool_calls"),
+        ],
+    )
+    async def test_sdk_enums_become_platform_vocabulary(
+        self, sdk_reason: CompletionsFinishReason, expected: str
+    ) -> None:
+        client = FakeClient(_Completion(finish_reason=sdk_reason))
+        provider = build_provider(client)
+        await provider.initialize()
+
+        response = await provider.generate(a_request(), CONTEXT)
+
+        assert response.finish_reason == expected
+
+    async def test_no_azure_type_name_reaches_the_response(self) -> None:
+        client = FakeClient(_Completion(finish_reason=CompletionsFinishReason.STOPPED))
+        provider = build_provider(client)
+        await provider.initialize()
+
+        response = await provider.generate(a_request(), CONTEXT)
+
+        assert response.finish_reason is not None
+        assert "CompletionsFinishReason" not in response.finish_reason
+        assert "." not in response.finish_reason
+
+    async def test_streaming_reports_the_same_vocabulary(self) -> None:
+        stream = _Stream(
+            [_StreamUpdate("hi"), _StreamUpdate(None, CompletionsFinishReason.TOKEN_LIMIT_REACHED)]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        assert chunks[-1].finish_reason == "length"
+
+    async def test_an_unrecognised_reason_is_reported_not_swallowed(self) -> None:
+        """A reason we have not seen is information, not a reason to claim success."""
+        client = FakeClient(_Completion(finish_reason="some_new_reason"))
+        provider = build_provider(client)
+        await provider.initialize()
+
+        response = await provider.generate(a_request(), CONTEXT)
+
+        assert response.finish_reason == "some_new_reason"
+
+    async def test_a_missing_reason_stays_absent(self) -> None:
+        client = FakeClient(_Completion(finish_reason=""))
+        provider = build_provider(client)
+        await provider.initialize()
+
+        response = await provider.generate(a_request(), CONTEXT)
+
+        assert response.finish_reason is None

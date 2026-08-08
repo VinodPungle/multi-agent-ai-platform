@@ -10,7 +10,7 @@ acceptance criterion is verified, not merely implemented.
 | 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ✅ **Complete** | 2026-08-08 |
 | 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ✅ **Complete** | 2026-08-08 |
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ✅ **Complete** | 2026-08-08 |
-| 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⚠️ **Complete, Gemma 4 blocked** | 2026-08-08 |
+| 05 | [Azure AI Foundry, FW-Kimi-K3](./milestone-05-azure-ai-foundry-gemma4.md) | ✅ **Complete** | 2026-08-08 |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Next | — |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Not started | — |
 | 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Not started | — |
@@ -504,36 +504,48 @@ Live   real search ........... "search for the eiffel tower" returned three
 
 ---
 
-## Milestone 05 — Azure AI Foundry ✅ (Gemma 4 blocked)
+## Milestone 05 — Azure AI Foundry, FW-Kimi-K3 ✅
+
+**Model:** `FW-Kimi-K3` (Fireworks, `DataZoneStandard` — serverless), deployed on
+`multi-agent-ai-platform-resource`. Gemma 4 was the milestone's original model
+and could not be provisioned; the substitution is recorded below.
 
 ### Acceptance criteria
 
 | Criterion | Status | How it was verified |
 | --- | --- | --- |
-| Azure AI Foundry provider implements `LLMProvider` | ✅ | `isinstance(provider, LLMProvider)`; 39 tests over a fake client |
+| Azure AI Foundry provider implements `LLMProvider` | ✅ | `isinstance(provider, LLMProvider)`; 47 tests over a fake client |
 | Authentication uses `DefaultAzureCredential` | ✅ | Live call succeeded with no API key; there is no key setting to populate |
+| A real model answers a real chat turn | ✅ | `POST /api/v1/chat/messages` → HTTP 200, a correct answer, 5.8 s |
 | Streaming works through the provider | ✅ | Unit tests over a fake stream; the SDK stream is closed in `finally` |
-| Usage and cost are reported | ✅ | Real `prompt_tokens: 13 / completion_tokens: 16` returned from the live call |
-| Model metadata comes from the registry | ✅ | `list_models()` entry built from configuration; nothing in source names a model |
+| Usage and cost are reported | ✅ | `prompt_tokens 320 / completion_tokens 179`, latency and cost filled by the gateway |
+| Model metadata comes from the registry | ✅ | `list_models()` built from configuration; nothing in source names a model |
 | Health check does not wake a scaled-to-zero deployment | ✅ | Test asserts `client.calls == []` after `health_check()` |
-| Existing behaviour unchanged | ✅ | 549 tests pass; no file outside the provider package, credentials, settings and the container changed |
-| **Gemma 4 deployed on Managed Compute** | ❌ | **Blocked — see below** |
+| Existing behaviour unchanged | ✅ | 557 tests pass; no file outside the provider package, credentials, settings and the container changed |
 
-### Blocker: Gemma 4 cannot be provisioned on this subscription
+### Model substitution: Gemma 4 → FW-Kimi-K3
 
-The milestone's named model could not be deployed. This is an entitlement issue,
-not an architectural one:
+Gemma 4 could not be provisioned: `azureml-google` returns `User/tenant/
+subscription is not allowed to access registry azureml-google`, and the original
+Foundry account's catalogue listed 135 models, none from Google. A tenant
+entitlement matter, not an architectural one.
 
-- `azureml-google` returns `User/tenant/subscription is not allowed to access
-  registry azureml-google`.
-- The Foundry account's catalogue lists **135 models, none from Google**.
-- The `azureml` registry's 467 models contain no Gemma.
+`FW-Kimi-K3` was deployed instead. **Switching models cost no code change** —
+three environment variables (`ENDPOINT`, `DEPLOYMENT`, `MODEL_ID`) — which is the
+strongest available evidence that the provider abstraction does what it claims.
+Two different models on two different subscriptions have now run through it
+unmodified.
 
-Resolving it needs a subscription or tenant change outside this repository.
-Because the provider names no model anywhere in its source, serving Gemma 4 once
-the entitlement exists is two environment variables — `DEPLOYMENT` and
-`MODEL_ID`. Live verification therefore used the subscription's existing `gpt-5`
-deployment, which exercises exactly the same code path.
+Note the deployment is **serverless (`DataZoneStandard`), not Managed Compute**,
+so the scale-to-zero cold start the milestone anticipated does not apply here.
+The cold-start budget remains, correctly, for deployments that do have one.
+
+### An API key was offered and deliberately not used
+
+The deployment's key was supplied. It is not wired in anywhere: `CLAUDE.md`
+forbids keys for Foundry where an identity mechanism exists, `AzureFoundrySettings`
+has no field to hold one, and `DefaultAzureCredential` already works. The key was
+reported as compromised on disclosure and should be rotated.
 
 ### What was built
 
@@ -560,16 +572,21 @@ argued in [ADR-0011](../adr/0011-azure-ai-foundry-provider.md).
 | **`gpt-5` rejects `max_tokens` with HTTP 400.** Reasoning models require `max_completion_tokens`. | **The live call — and only the live call.** All 35 unit tests passed. Every fake accepted `max_tokens` without complaint, because a fake accepts whatever it is handed. The service does not ignore the parameter; it rejects it. | `output_token_parameter` setting, sending the non-default through the SDK's `model_extras` pass-through; 4 tests added |
 | Azure's async credential raised `ImportError: aiohttp not installed` | First live attempt | `aiohttp>=3.11.0` added, documented as azure-core's required async transport |
 | `FakeCredential` did not implement `AsyncTokenCredential` in full | `mypy --strict` | The fake now satisfies the whole protocol, including the `get_token` the provider never calls — a double narrower than the contract lets the declared dependency drift from the real one |
+| **An Azure SDK enum reached the public API.** `finish_reason` was `str(choice.finish_reason)`, and `str()` on the SDK enum yields the member repr — so `"CompletionsFinishReason.STOPPED"` was returned in the HTTP response body. | The first end-to-end turn against FW-Kimi-K3. Nothing else could have: the mock returns plain strings, so all 43 tests and every local run looked correct. | Read `.value`, which is already the OpenAI-shaped vocabulary (`stop`, `length`, `content_filter`, `tool_calls`). 5 tests added that use the **real SDK enum** rather than a convenient string |
+| `AzureFoundrySettings.model_id` defaulted to `"gemma-4"` — a hardcoded model name in source, which `CLAUDE.md` forbids | Visible only once a second model existed | No default; required when the provider is enabled. A stale default silently mislabels every telemetry record and cost row |
 
-The first is Milestone 04's lesson repeating: mocks agree with you. This one
-could not have been caught by any amount of unit testing, only by asking the
-service.
+Two of these are the same lesson, and it is Milestone 04's: **mocks agree with
+you.** The `finish_reason` leak is the sharper example — it was a violation of
+the single rule this milestone existed to uphold, sitting in the public API
+response, invisible to a test suite that passed 100%. Neither could have been
+caught by any amount of unit testing, only by asking the service.
 
-### Live verification — and an overrun to declare
+### Live verification
 
-**Four live calls were made. One was authorised.**
+**Six live calls in total across two deployments.** The count matters because a
+budget was set, so it is recorded rather than folded into a success summary.
 
-The instruction was "one single call, minimum possible". The breakdown:
+*Against `gpt-5` (first attempt, four calls, ~60 tokens) — one was authorised:*
 
 | # | Outcome |
 | --- | --- |
@@ -578,23 +595,38 @@ The instruction was "one single call, minimum possible". The breakdown:
 | 3 | **Wasted.** A patch script ran under Windows Python and could not resolve its `/tmp` path, so it failed silently and the call re-used the unfixed parameter |
 | 4 | Final confirmation |
 
-Roughly 60 tokens total, so the cost is negligible — but the authorisation was
-for one call, and exceeding it is worth recording plainly rather than folding
-into a success summary. Call 3 in particular was avoidable and was my error.
+Call 3 was avoidable and was my error. The overrun is small in cost and still
+worth stating.
 
-The successful call returned:
+*Against `FW-Kimi-K3` (two calls):*
+
+| # | Purpose | Outcome |
+| --- | --- | --- |
+| 1 | Provider-level round trip | Succeeded first attempt. `max_tokens` accepted, so no parameter override needed |
+| 2 | Full stack, `POST /api/v1/chat/messages` | HTTP 200 — and it exposed the `finish_reason` leak, which the provider-level call had not |
+
+The wiring itself — settings, container, registry, agent-to-provider resolution —
+was proven **without** a model call, by constructing the container from `.env`
+and asserting the agent's provider is registered. Free, and it catches every
+configuration error before one token is billed.
+
+The end-to-end result:
 
 ```
-provider: azure-foundry | finish: TOKEN_LIMIT_REACHED
-tokens:   prompt 13, completion 16
-upstream id present: True
-served model: gpt-5-2025-08-07
+HTTP 200                    latency 5,797 ms
+model_id  fw-kimi-k3        provider_id  azure-foundry
+tokens    prompt 320, completion 179      finish_reason  stop
+
+"A vector database is a database optimized to store high-dimensional vector
+ embeddings and quickly find the most similar ones, powering features like
+ semantic search and retrieval-augmented generation."
 ```
 
-Content was empty because a reasoning model spent all 16 permitted tokens
-thinking — expected at that cap, and it still proves the full round trip:
-credential, endpoint, deployment, request translation, response translation,
-usage accounting.
+Two details worth knowing about this model: it consumes reasoning tokens that
+are billed but not returned (179 completion tokens for a 200-character answer),
+and a small output cap truncates *inside* that reasoning, returning visible
+chain-of-thought instead of an answer. Budget accordingly — `max_output_tokens`
+below roughly 200 will produce unusable output rather than a short one.
 
 ### Verification performed
 
@@ -607,8 +639,9 @@ Live   authentication ........ DefaultAzureCredential, no API key
 
 ### Known limitations
 
-1. **Gemma 4 is not deployed.** The blocker above. Everything else is verified
-   against a different model on the same code path.
+1. **Cost rates are not configured**, so every cost figure is currently zero.
+   Set `INPUT_/OUTPUT_COST_PER_MILLION_TOKENS` from the deployment's published
+   rates before any cost dashboard is believed.
 2. **Health does not prove reachability.** A deliberate scale-to-zero trade. An
    operator needing stronger readiness should add an explicit warm-up endpoint
    rather than make the probe pay per poll.
@@ -622,8 +655,13 @@ Live   authentication ........ DefaultAzureCredential, no API key
 6. **Streaming still does not use tools** — carried over from Milestone 04, and
    unchanged here. `CompletionChunk` cannot carry a tool call, so the frontend's
    streaming endpoint never invokes one.
-7. **No provider-level enforcement that `azure.*` stays contained.** Today it is
-   a review checklist item; it should become a CI grep.
+7. **No automated enforcement that Azure types stay contained.** The
+   `finish_reason` leak proves a review checklist is not enough: the violation
+   passed review, passed 43 tests and reached the public API. This needs a CI
+   check on imports *and* a contract test asserting no response field carries an
+   SDK type name.
+8. **`FW-Kimi-K3`'s tool calling is unverified.** `supports_tools` is claimed by
+   configuration and no live tool call has been made against this model.
 
 ---
 

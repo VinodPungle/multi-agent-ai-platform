@@ -660,7 +660,7 @@ version: 1.0
 
 provider: azure-foundry
 
-model: gemma-4
+model: fw-kimi-k3
 
 description: General conversational assistant
 
@@ -1999,7 +1999,7 @@ Azure AI Foundry
 
 ↓
 
-Gemma 4 Managed Compute
+FW-Kimi-K3 Deployment
 
 Backend --> Application Insights
 
@@ -2022,9 +2022,9 @@ Resource Group
 
 Azure AI Foundry Project
 
-Managed Compute
+Model Deployment
 
-Gemma 4 Deployment
+FW-Kimi-K3
 
 Azure Container Apps
 
@@ -2119,7 +2119,7 @@ Azure AI Foundry
 
 ↓
 
-Gemma 4
+FW-Kimi-K3
 ```
 
 Authentication:

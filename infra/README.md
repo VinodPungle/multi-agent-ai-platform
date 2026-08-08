@@ -36,7 +36,7 @@ that every template compiles on every pull request.
 | Container Registry | Backend and frontend images, admin user disabled | 01 |
 | Container Apps environment | Shared runtime for both services | 01 |
 | Container Apps (backend, frontend) | Deployed by azd from `azure.yaml` | 06 |
-| Azure AI Foundry project + Gemma 4 managed compute | Scale-to-zero inference | 05 |
+| Azure AI Foundry project + model deployment | Inference | 05 |
 | Cosmos DB, Redis, Azure AI Search | Persistent memory and retrieval | 08+ |
 
 ## Design decisions

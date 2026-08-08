@@ -312,7 +312,7 @@ class AzureFoundrySettings(BaseModel):
 
     Model identity is configuration end to end: `deployment` selects what
     answers, and nothing in the source names a model. Pointing the platform at
-    Gemma 4, GPT, DeepSeek or Cohere is an environment variable.
+    Kimi, Gemma, GPT, DeepSeek or Cohere is an environment variable.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -342,9 +342,14 @@ class AzureFoundrySettings(BaseModel):
         ),
     )
     model_id: str = Field(
-        default="gemma-4",
-        min_length=1,
-        description="Platform-wide model id this deployment serves.",
+        default="",
+        description=(
+            "Platform-wide model id this deployment serves. Deliberately has no "
+            "default: a source-level default is a hardcoded model name, which "
+            "`CLAUDE.md` forbids, and it silently mislabels every telemetry "
+            "record and cost row when the deployment serves something else. "
+            "Required when the provider is enabled."
+        ),
     )
     provider_id: str = Field(default="azure-foundry", min_length=1)
 
@@ -386,7 +391,9 @@ class AzureFoundrySettings(BaseModel):
         description=(
             "Budget for the first request to a Managed Compute deployment that has "
             "scaled to zero. Generous on purpose: an instance start takes tens of "
-            "seconds, and a tight timeout makes every cold start look like an outage."
+            "seconds, and a tight timeout makes every cold start look like an outage. "
+            "Serverless (pay-as-you-go) deployments have no cold start, so lowering "
+            "this for one of those surfaces real latency problems sooner."
         ),
     )
 
@@ -402,7 +409,11 @@ class AzureFoundrySettings(BaseModel):
 
         missing = [
             name
-            for name, value in (("endpoint", self.endpoint), ("deployment", self.deployment))
+            for name, value in (
+                ("endpoint", self.endpoint),
+                ("deployment", self.deployment),
+                ("model_id", self.model_id),
+            )
             if not value.strip()
         ]
         if missing:
