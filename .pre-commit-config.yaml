@@ -1,0 +1,150 @@
+# =============================================================================
+# Pre-commit hooks
+# =============================================================================
+#   task hooks:install        # or: uv run pre-commit install --install-hooks
+#   task hooks:run            # run every hook against every file
+#
+# Two stages, split by cost. A hook that makes committing feel slow gets
+# bypassed with `--no-verify`, and a bypassed hook protects nothing:
+#
+#   pre-commit  fast, file-scoped   whitespace, secrets, lint, format
+#   pre-push    whole-project       strict type check, full test suite
+#
+# The gates here are a subset of `.github/workflows/ci.yml`, never a superset.
+# A hook that CI does not also run would let a change pass review locally and
+# fail in the pipeline, or the reverse — both erode trust in the hooks.
+# =============================================================================
+
+minimum_pre_commit_version: '3.5.0'
+
+# `pre-commit install` sets up both hook types, so the pre-push gates are not
+# silently skipped by a developer who only ran the documented install command.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  # ---------------------------------------------------------------------------
+  # Hygiene — cheap, universal, and the source of most review noise when absent
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Two trailing spaces are a hard line break in Markdown.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        # `.gitattributes` checks PowerShell and batch files out as CRLF.
+        # Rewriting them to LF here would make Git restore the CRLF on the next
+        # checkout, and the file would show as modified forever.
+        exclude: \.(ps1|psm1|psd1|bat|cmd)$
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-json
+        # Several tools here read JSON with comments — VS Code, Dev Containers
+        # and the TypeScript compiler all accept it, and all three configs use
+        # it. Excluded rather than stripped of the comments that document them.
+        exclude: ^(\.vscode/|\.devcontainer/|src/frontend/tsconfig.*\.json$)
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  # ---------------------------------------------------------------------------
+  # Secrets — the one class of mistake that cannot be undone by a later commit
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        # `detect-private-key` above catches key material only. This catches
+        # connection strings and tokens, which is what this platform actually
+        # risks committing: `.env` is ignored, but `.env.example` is not, and an
+        # Application Insights connection string pasted into it would ship.
+
+  # ---------------------------------------------------------------------------
+  # Project-local gates
+  # ---------------------------------------------------------------------------
+  # Every gate below runs through `uv` or `npm` rather than in an environment
+  # pre-commit manages itself, so `uv.lock` and `package-lock.json` are the only
+  # place a tool version is declared.
+  #
+  # This is not the conventional setup, and it was not the first attempt. The
+  # mirror hooks (`ruff-pre-commit`, `black-pre-commit-mirror`) pin their own
+  # revisions, which drifted from the versions in `uv.lock` within a single
+  # milestone: ruff 0.8.4 in the hook rejected code that ruff 0.16.2 in the
+  # project accepted. A hook that disagrees with CI is worse than no hook —
+  # it fails a commit that would have passed the pipeline, and developers learn
+  # to reach for `--no-verify`.
+  #
+  # `pass_filenames: false` throughout: mypy resolves the whole import graph and
+  # both test suites are whole-project, so checking a subset reports errors that
+  # do not exist and misses ones that do.
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        # `--fix` only. Formatting belongs to Black; enabling Ruff's formatter
+        # too would give two tools an opinion about the same characters.
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types: [python]
+
+      - id: black
+        name: black (format)
+        entry: uv run black
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy (strict, whole project)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        # mypy resolves the whole import graph; checking one file in isolation
+        # reports errors that do not exist and misses ones that do.
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: eslint
+        name: eslint (frontend)
+        entry: npm --prefix src/frontend run lint
+        language: system
+        files: ^src/frontend/.*\.(ts|tsx|js|jsx)$
+        pass_filenames: false
+
+      - id: prettier
+        name: prettier (frontend, check only)
+        entry: npm --prefix src/frontend run format:check
+        language: system
+        files: ^src/frontend/.*\.(ts|tsx|js|jsx|css|json|html|md)$
+        pass_filenames: false
+
+      - id: tsc
+        name: typescript (frontend)
+        entry: npm --prefix src/frontend run typecheck
+        language: system
+        files: ^src/frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: vitest
+        name: vitest (frontend)
+        entry: npm --prefix src/frontend test
+        language: system
+        files: ^src/frontend/
+        pass_filenames: false
+        stages: [pre-push]
