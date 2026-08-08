@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from agent_platform.api.app import create_app
 from agent_platform.configuration.settings import (
+    AgentSettings,
     AppSettings,
     ChatSettings,
     Environment,
@@ -33,6 +35,11 @@ from agent_platform.configuration.settings import (
 pytestmark = pytest.mark.integration
 
 CHAT = "/api/v1/chat"
+
+#: The suite runs each test in an empty temporary directory, so the default
+#: relative prompts path cannot resolve. Point at the repository's real assets:
+#: these tests should fail if a committed prompt is malformed.
+PROMPTS_ROOT = Path(__file__).resolve().parents[3] / "prompts"
 
 
 @pytest.fixture
@@ -49,7 +56,8 @@ def chat_settings() -> PlatformSettings:
         logging=LoggingSettings(level="DEBUG", renderer="json"),
         telemetry=TelemetrySettings(enabled=False),
         mock_provider=MockProviderSettings(enabled=True, chunk_delay_seconds=0.0),
-        chat=ChatSettings(model_id="mock-echo"),
+        agent=AgentSettings(provider_id="mock", model_id="mock-echo"),
+        chat=ChatSettings(agent_id="chat-agent", prompts_directory=str(PROMPTS_ROOT)),
     )
 
 

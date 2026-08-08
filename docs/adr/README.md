@@ -18,6 +18,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0006](./0006-llm-gateway-and-provider-neutral-contract.md) | Route every model call through an LLM Gateway | Accepted | 01 → 01.5 |
 | [0007](./0007-task-runner-and-git-hook-strategy.md) | Task as the command runner; hooks share the project's tool versions | Accepted | 01.5 |
 | [0008](./0008-server-sent-events-for-streaming-chat.md) | Stream chat over server-sent events, consumed with `fetch` | Accepted | 02 |
+| [0009](./0009-agent-runtime-and-workflow-engine-abstraction.md) | An Agent Runtime, with LangGraph behind a workflow abstraction | Accepted | 03 |
 
 ## Writing one
 

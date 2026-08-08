@@ -10,21 +10,21 @@ dependencies = [
     # Platform contracts — the backend depends on interfaces, not implementations.
     "agent-platform-sdk",
     "agent-platform-shared",
-
     # Presentation layer
     "fastapi>=0.115.6",
     "uvicorn[standard]>=0.34.0",
-
     # Configuration — strongly typed, validated at startup
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
-
     # Composition root
     "dependency-injector>=4.44.0",
-
+    # Workflow orchestration. Kept behind `WorkflowEngine` so the graph library
+    # is replaceable — see ADR-0009.
+    "langgraph>=0.2.60",
+    # Prompt asset front matter. Prompts are versioned files with YAML metadata.
+    "pyyaml>=6.0.2",
     # Structured logging
     "structlog>=24.4.0",
-
     # Observability
     "opentelemetry-api>=1.29.0",
     "opentelemetry-sdk>=1.29.0",

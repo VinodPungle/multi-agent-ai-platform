@@ -59,6 +59,9 @@ services:
       - ./src/backend/agent_platform:/app/src/backend/agent_platform:ro
       - ./src/sdk/agent_platform_sdk:/app/src/sdk/agent_platform_sdk:ro
       - ./src/shared/agent_platform_shared:/app/src/shared/agent_platform_shared:ro
+      # Prompt assets, so editing one takes effect on reload rather than needing
+      # an image rebuild. Read-only, like the source.
+      - ./prompts:/app/prompts:ro
     healthcheck:
       test:
         [

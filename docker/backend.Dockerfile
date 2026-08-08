@@ -73,6 +73,10 @@ COPY src/shared ./src/shared
 COPY src/sdk ./src/sdk
 COPY src/backend ./src/backend
 
+# Prompt assets are deployed artefacts, not source: the application reads them
+# at startup and refuses to serve an agent whose prompt is missing.
+COPY prompts ./prompts
+
 # Editable installs, so a bind-mounted source edit takes effect without a
 # rebuild. Compose overlays the host directories over these paths.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -106,6 +110,11 @@ COPY --from=dependencies --chown=platform:platform /app/.venv /app/.venv
 COPY --chown=platform:platform src/shared/agent_platform_shared ./src/shared/agent_platform_shared
 COPY --chown=platform:platform src/sdk/agent_platform_sdk ./src/sdk/agent_platform_sdk
 COPY --chown=platform:platform src/backend/agent_platform ./src/backend/agent_platform
+
+# Versioned prompt assets. Without these the application starts and every agent
+# fails its first request with "No prompt registered" — a deployment that looks
+# healthy and cannot answer.
+COPY --chown=platform:platform prompts ./prompts
 
 # The venv holds third-party dependencies only (`--no-install-workspace` above);
 # our own packages are resolved from source, which keeps the image free of build

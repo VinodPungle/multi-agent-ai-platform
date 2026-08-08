@@ -36,6 +36,7 @@ from agent_platform.api.v1.router import api_v1_router
 from agent_platform.configuration.settings import PlatformSettings, get_settings
 from agent_platform.dependencies.container import ApplicationContainer
 from agent_platform.dependencies.providers import CONTAINER_STATE_KEY
+from agent_platform.dependencies.startup import shutdown_platform, start_platform
 from agent_platform.exceptions.base import ConfigurationError
 from agent_platform.telemetry.logging import configure_logging, get_logger
 from agent_platform.telemetry.tracing import configure_tracing, shutdown_tracing
@@ -71,6 +72,7 @@ def _load_settings() -> PlatformSettings:
 
 def _build_lifespan(
     settings: PlatformSettings,
+    container: ApplicationContainer,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Create the lifespan handler bound to this application's settings.
 
@@ -91,14 +93,16 @@ def _build_lifespan(
             features=settings.features.as_dict(),
         )
 
-        # Provider initialisation is added here as later milestones register
-        # providers, so a misconfigured provider fails at boot rather than on a
-        # user's first request.
+        # Initialises every provider and validates that each agent's model and
+        # provider actually exist. A configuration mistake stops the process
+        # here rather than surfacing on a user's first request.
+        await start_platform(container)
 
         try:
             yield
         finally:
             _logger.info("platform.stopping")
+            await shutdown_platform(container)
             # Telemetry is flushed last so the shutdown record above is exported.
             shutdown_tracing()
 
@@ -138,7 +142,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         docs_url="/docs" if resolved.app.debug else None,
         redoc_url="/redoc" if resolved.app.debug else None,
         openapi_url="/openapi.json" if resolved.app.debug else None,
-        lifespan=_build_lifespan(resolved),
+        lifespan=_build_lifespan(resolved, container),
     )
 
     # Read by dependency providers, so route handlers resolve from *this* app's

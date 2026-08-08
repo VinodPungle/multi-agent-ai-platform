@@ -8,8 +8,8 @@ acceptance criterion is verified, not merely implemented.
 | 01 | [Repository Foundation](./milestone-01-foundation.md) | ✅ **Complete** | 2026-08-08 |
 | 01.5 | [Developer Experience](./milestone-01.5-developer-experience.md) | ✅ **Complete** | 2026-08-08 |
 | 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ✅ **Complete** | 2026-08-08 |
-| 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ⬜ Next | — |
-| 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ⬜ Not started | — |
+| 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ✅ **Complete** | 2026-08-08 |
+| 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ⬜ Next | — |
 | 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Not started | — |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Not started | — |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Not started | — |
@@ -339,6 +339,88 @@ Live       streaming ......... started → 60+ deltas → completed, against a r
 
 ---
 
-## Next: Milestone 03 — Agent Runtime and LangGraph
+## Milestone 03 — Agent Runtime and LangGraph ✅
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Runtime executes ChatAgent | ✅ | Every chat turn now goes service → runtime → engine → agent → gateway; verified against a running server |
+| LangGraph orchestrates execution | ✅ | `LangGraphWorkflowEngine` compiles and invokes a state graph; it is the default engine |
+| Execution context propagates | ✅ | Agent, model, provider, execution id stamped by the runtime; correlation id survives; caller's context never mutated |
+| Registries resolve implementations | ✅ | Agent, provider, model and tool registries; startup refuses an agent naming a model no provider serves |
+| Mock provider continues to work | ✅ | All Milestone 02 integration tests pass unchanged against the new path |
+| Telemetry captures runtime execution | ✅ | Spans per runtime and workflow call; five runtime event types observed in a live run |
+
+### Test cases
+
+| Case | Status | Detail |
+| --- | --- | --- |
+| Agent registration | ✅ | Duplicate registration refused; a miss names what is registered |
+| Workflow execution | ✅ | One suite parametrised across both engines |
+| Runtime failure handling | ✅ | A `ProviderError` survives the graph unchanged rather than becoming a `WorkflowError` |
+| Registry lookup | ✅ | 12 tests on the single implementation every registry shares |
+| Prompt loading | ✅ | Versioning, pinning, rollback listing, and six malformed-file cases |
+| Execution context propagation | ✅ | 5 tests, including that an existing execution id is not replaced |
+
+### What was built
+
+`AgentRuntime` owning the lifecycle; `WorkflowEngine` with two implementations
+(LangGraph and a deliberate twenty-line `direct` engine that proves the seam);
+`ChatAgent`; agent, provider, model and tool registries over one generic
+implementation; a file-backed prompt provider with YAML front matter and
+versioning; runtime event publication behind an interface; and startup
+validation of the wiring.
+
+`ChatService` lost its memory handling, prompt assembly and gateway call — all
+three moved into the runtime. What remains is genuinely chat's own: validating a
+message, mapping a conversation onto a turn, and translating runtime output into
+SSE events. That reduction is the test of whether the runtime earned its place.
+
+### Defects found during verification, and fixed
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| `_logger.debug(..., agent_id=..., **context.to_log_fields())` passed `agent_id` twice, raising `TypeError` inside the logger on every completed turn | First runtime test run | The context already carries it; the explicit argument was removed in both places it appeared |
+| **`prompts/` was never copied into the Docker image.** The application would have started and failed every request with "No prompt registered" — a container that looks healthy and cannot answer | Integration tests, which run in a temp directory and so hit the same missing-path condition | `COPY prompts` added to both image stages, plus a read-only Compose mount so editing a prompt is a reload rather than a rebuild |
+| Startup validation refused to boot when *no* provider was registered — which is the default until Milestone 05, and what a correct production deployment looks like today | 29 pre-existing tests failed at once | Validation is skipped, with a warning, when there are no providers to validate against |
+| The model registry was populated by a synchronous bridge function with an apologetic name | Writing it | Replaced with the correct design: an empty registry filled during async startup by awaiting each provider's `list_models()` |
+
+### Verification performed
+
+```
+ruff .............. All checks passed
+black ............. 126 files unchanged
+mypy --strict ..... no issues in 126 source files
+pytest ............ 440 passed, 97% statement coverage  (360 before)
+
+Live   LangGraph engine ... streaming, session memory and 5 runtime event types
+       direct engine ...... identical behaviour with no graph library involved
+       misconfiguration ... `PLATFORM_AGENT__MODEL_ID=does-not-exist` refuses to
+                            start: "names model 'does-not-exist', which no
+                            provider serves (available: mock-echo)"
+```
+
+### Known limitations
+
+1. **The graph has one node**, compiled per execution. Both are right at this
+   size and wrong at some larger one; neither has been measured.
+2. **Streaming bypasses the graph.** LangGraph streams state between nodes, not
+   tokens within one. A multi-node workflow will need a real answer to per-node
+   streaming that this milestone did not have to give.
+3. **Budget enforcement is advisory.** A breach is logged and published; the
+   answer is still returned, because the tokens are already spent. Real
+   enforcement needs a loop that can be stopped — Milestone 04.
+4. **One agent, registered from configuration.** A registry loaded from YAML
+   descriptors is what more than one agent will need.
+5. **No agent or model discovery endpoints.** `/api/v1/agents` and
+   `/api/v1/models` are listed in the API conventions and not yet built; the
+   registries that would serve them exist.
+6. **`_enforce_pre_execution_budget` is empty.** Every `BudgetPolicy` limit is
+   post-hoc for a single-call agent. The seam exists for the tool loop.
+
+---
+
+## Next: Milestone 04 — Internet Search and Tool Framework
 
 Not started. Awaiting approval before any work begins.

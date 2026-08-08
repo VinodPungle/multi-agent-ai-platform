@@ -34,6 +34,7 @@ from agent_platform_sdk.policies.retry import RetryPolicy
 from agent_platform_sdk.policies.timeout import TimeoutPolicy
 
 __all__ = [
+    "AgentSettings",
     "AppSettings",
     "ChatSettings",
     "Environment",
@@ -45,18 +46,14 @@ __all__ = [
     "PlatformSettings",
     "ServerSettings",
     "TelemetrySettings",
+    "WorkflowSettings",
     "get_settings",
 ]
 
-#: Default instruction sent with every chat turn. Short and generic on purpose:
-#: the Prompt Registry takes ownership of prompts in Milestone 03, and a long
-#: prompt embedded here would be exactly what ``CLAUDE.md`` forbids. Overridable
-#: by configuration in the meantime.
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful assistant running on the Enterprise Multi-Agent AI Platform. "
-    "Answer clearly and concisely. Use Markdown for structure and fenced code blocks "
-    "with a language tag for code."
-)
+# The system prompt used to live here as a constant. It now lives in
+# `prompts/agents/chat/system.md` as a versioned asset, which is what
+# `CLAUDE.md` requires of every prompt — a prompt in a Python file can only be
+# changed by shipping a release.
 
 
 class Environment(StrEnum):
@@ -302,11 +299,40 @@ class MockProviderSettings(BaseModel):
     )
 
 
-class ChatSettings(BaseModel):
-    """Chat behaviour that is a deployment decision rather than a code one."""
+class WorkflowSettings(BaseModel):
+    """Which engine orchestrates agent execution.
+
+    Two implementations of one protocol. `direct` runs an agent with no graph
+    library involved, which is both a reference implementation and a way to rule
+    orchestration out when diagnosing a problem.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    engine: Literal["langgraph", "direct"] = Field(
+        default="langgraph",
+        description="Workflow engine. Both satisfy the same contract.",
+    )
+
+
+class AgentSettings(BaseModel):
+    """The chat agent's descriptor, as configuration.
+
+    ``architecture.md`` §17 requires agent definitions to be data rather than
+    code: changing an agent's model, prompt or budget must never mean editing a
+    Python file. This is the first agent, so its descriptor is assembled from
+    these fields. A registry loaded from YAML descriptors replaces it once there
+    is more than one agent to declare.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_id: str = Field(default="chat-agent", min_length=1)
+    provider_id: str = Field(
+        default="mock",
+        min_length=1,
+        description="Default provider, resolved through the provider registry.",
+    )
     model_id: str = Field(
         default="mock-echo",
         min_length=1,
@@ -315,10 +341,34 @@ class ChatSettings(BaseModel):
             "configuration change; no source file names a model."
         ),
     )
-    system_prompt: str = Field(
-        default=_DEFAULT_SYSTEM_PROMPT,
+    prompt_id: str = Field(
+        default="chat-agent-system",
         min_length=1,
-        description="Instruction sent with every turn. Owned by the Prompt Registry from M03.",
+        description="Prompt asset id, resolved through the prompt provider.",
+    )
+    prompt_version: str | None = Field(
+        default=None,
+        description=(
+            "Pinned prompt version. None selects the newest. Pin one for "
+            "reproducible behaviour across a prompt change."
+        ),
+    )
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+
+
+class ChatSettings(BaseModel):
+    """Chat behaviour that is a deployment decision rather than a code one."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_id: str = Field(
+        default="chat-agent",
+        min_length=1,
+        description=(
+            "Agent that answers chat turns. Pointing chat at a different agent "
+            "is a configuration change."
+        ),
     )
     max_prompt_characters: int = Field(
         default=32_000,
@@ -326,7 +376,15 @@ class ChatSettings(BaseModel):
         description=(
             "Rejection threshold for one message. Characters rather than tokens because "
             "no tokeniser is available before a provider is chosen; the model registry "
-            "enforces the real context window from Milestone 03."
+            "enforces the real context window."
+        ),
+    )
+    prompts_directory: str = Field(
+        default="prompts",
+        min_length=1,
+        description=(
+            "Root of the versioned prompt assets, relative to the working directory "
+            "or absolute. Prompts are deployed artefacts, loaded once at startup."
         ),
     )
 
@@ -404,6 +462,8 @@ class PlatformSettings(BaseSettings):
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     mock_provider: MockProviderSettings = Field(default_factory=MockProviderSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)

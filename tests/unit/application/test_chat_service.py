@@ -1,22 +1,22 @@
 """Chat service behaviour.
 
-The service is where a turn becomes a model call and a memory write, so these
-tests cover the three things that go wrong there and are invisible until a user
-hits them: context assembly (does the model see the conversation?), recording
-(does the conversation survive the turn?), and what happens when a stream ends
-early — by failure or because the user pressed stop.
+Since Milestone 03 the service holds no memory of its own and calls no gateway:
+it validates a message, maps a conversation onto a runtime turn, and translates
+runtime output into SSE event types. These tests cover exactly that boundary.
 
-The gateway is faked and memory is real. Faking the gateway keeps the tests
-provider-independent, which is the property the architecture exists to have;
-using the real memory provider means the interaction between the two is
-exercised rather than assumed.
+What used to be tested here — context assembly, memory writes, model selection —
+moved with the code, to ``tests/unit/runtime/test_agent_runtime.py``. Testing it
+in both places would mean two suites asserting one behaviour, and the one that
+did not move would slowly stop being true.
+
+The service is driven over a real runtime with a fake gateway, because the
+translation only means anything against real runtime output.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from datetime import UTC, datetime
-from decimal import Decimal
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -27,17 +27,13 @@ from agent_platform.domain.chat import (
     ChatErrorEvent,
     ChatStartedEvent,
 )
-from agent_platform.exceptions.base import ProviderError, ValidationError
-from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
-from agent_platform_sdk.contracts.execution_context import ExecutionContext
-from agent_platform_sdk.dto.completion import (
-    CompletionChunk,
-    CompletionRequest,
-    CompletionResponse,
-    TokenUsage,
+from agent_platform.exceptions.base import (
+    NotFoundError,
+    PolicyViolationError,
+    ProviderError,
+    ValidationError,
 )
-from agent_platform_sdk.dto.message import Message
-from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
+from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.types.enums import MessageRole
 
 pytestmark = pytest.mark.unit
@@ -46,258 +42,137 @@ CONTEXT = ExecutionContext()
 CONVERSATION = "conversation-1"
 
 
-def _split_preserving_spaces(text: str) -> tuple[str, ...]:
-    """Split into word chunks whose concatenation is exactly ``text``."""
-    words = text.split(" ")
-    return tuple(
-        word if index == len(words) - 1 else f"{word} " for index, word in enumerate(words)
-    )
+@pytest.fixture
+def build_service(build_stack: Callable[..., Any]) -> Callable[..., Any]:
+    """Return a factory producing a service over a real runtime."""
 
-
-class FakeGateway:
-    """A gateway that records what it was asked and answers as instructed.
-
-    Satisfies :class:`LLMGateway` structurally.
-    """
-
-    def __init__(
-        self,
-        answer: str = "The answer.",
-        chunks: tuple[str, ...] | None = None,
-        failure: Exception | None = None,
-        fail_after_chunks: int | None = None,
-    ) -> None:
-        self._answer = answer
-        # Whitespace stays attached to the preceding word, so concatenating the
-        # chunks reproduces `answer` exactly — the same guarantee the real
-        # provider gives. A fake whose stream and non-stream paths disagree
-        # would make the service look broken when it is not.
-        self._chunks = chunks if chunks is not None else _split_preserving_spaces(answer)
-        self._failure = failure
-        self._fail_after_chunks = fail_after_chunks
-        self.requests: list[CompletionRequest] = []
-
-    async def generate(
-        self, request: CompletionRequest, context: ExecutionContext
-    ) -> CompletionResponse:
-        del context
-        self.requests.append(request)
-        if self._failure is not None:
-            raise self._failure
-        return CompletionResponse(
-            message=Message(role=MessageRole.ASSISTANT, content=self._answer),
-            model_id=request.model_id,
-            provider_id="fake",
-            usage=TokenUsage(prompt_tokens=10, completion_tokens=5),
-            estimated_cost=Decimal("0.01"),
-            finish_reason="stop",
+    def _build(**kwargs: Any) -> tuple[ChatService, Any]:  # noqa: ANN401 - forwards kwargs
+        max_prompt_characters = kwargs.pop("max_prompt_characters", 32_000)
+        stack = build_stack(**kwargs)
+        service = ChatService(
+            runtime=stack.runtime,
+            memory=stack.memory,
+            agent_id="chat-agent",
+            max_prompt_characters=max_prompt_characters,
         )
+        return service, stack
 
-    async def stream(
-        self, request: CompletionRequest, context: ExecutionContext
-    ) -> AsyncIterator[CompletionChunk]:
-        del context
-        self.requests.append(request)
-
-        if self._failure is not None and self._fail_after_chunks is None:
-            raise self._failure
-
-        for index, chunk in enumerate(self._chunks):
-            if self._fail_after_chunks is not None and index >= self._fail_after_chunks:
-                assert self._failure is not None
-                raise self._failure
-            yield CompletionChunk(delta=chunk)
-
-        yield CompletionChunk(
-            delta="",
-            finish_reason="stop",
-            usage=TokenUsage(prompt_tokens=10, completion_tokens=5),
-        )
-
-    async def count_tokens(
-        self, request: CompletionRequest, context: ExecutionContext
-    ) -> TokenUsage:
-        del request, context
-        return TokenUsage(prompt_tokens=10)
-
-    async def estimate_cost(
-        self, model_id: str, usage: TokenUsage, context: ExecutionContext
-    ) -> Decimal:
-        del model_id, usage, context
-        return Decimal(0)
-
-
-class ManualClock:
-    """A clock that only moves when a test moves it."""
-
-    def __init__(self) -> None:
-        self._monotonic = 0.0
-
-    def now(self) -> datetime:
-        return datetime(2026, 1, 1, tzinfo=UTC)
-
-    def monotonic(self) -> float:
-        return self._monotonic
-
-    def advance(self, seconds: float) -> None:
-        self._monotonic += seconds
-
-
-def build_service(
-    gateway: FakeGateway | None = None,
-    memory: InMemorySessionMemoryProvider | None = None,
-    max_prompt_characters: int = 32_000,
-) -> tuple[ChatService, FakeGateway, InMemorySessionMemoryProvider]:
-    """Assemble a service over a fake gateway and real memory."""
-    resolved_gateway = gateway or FakeGateway()
-    resolved_memory = memory or InMemorySessionMemoryProvider()
-    service = ChatService(
-        gateway=resolved_gateway,
-        memory=resolved_memory,
-        clock=ManualClock(),
-        model_id="test-model",
-        system_prompt="You are a test assistant.",
-        max_prompt_characters=max_prompt_characters,
-    )
-    return service, resolved_gateway, resolved_memory
-
-
-class TestContractConformance:
-    def test_the_fake_gateway_satisfies_the_contract(self) -> None:
-        """If it did not, these tests would be proving something else."""
-        assert isinstance(FakeGateway(), LLMGateway)
+    return _build
 
 
 class TestPromptValidation:
-    """An invalid prompt must cost nothing."""
+    """An invalid message must cost nothing."""
 
     @pytest.mark.parametrize("prompt", ["", "   ", "\n\t "])
-    async def test_a_blank_prompt_is_rejected(self, prompt: str) -> None:
-        service, gateway, _ = build_service()
+    async def test_a_blank_message_is_rejected(
+        self, build_service: Callable[..., Any], prompt: str
+    ) -> None:
+        service, stack = build_service()
 
         with pytest.raises(ValidationError, match="cannot be empty"):
             await service.send(CONVERSATION, prompt, CONTEXT)
 
-        assert not gateway.requests
+        assert not stack.gateway.requests
 
-    async def test_an_oversized_prompt_is_rejected(self) -> None:
-        service, gateway, _ = build_service(max_prompt_characters=10)
+    async def test_an_oversized_message_is_rejected(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, stack = build_service(max_prompt_characters=10)
 
         with pytest.raises(ValidationError, match="cannot exceed"):
             await service.send(CONVERSATION, "x" * 11, CONTEXT)
 
-        assert not gateway.requests
+        assert not stack.gateway.requests
 
-    async def test_the_prompt_is_trimmed_before_use(self) -> None:
-        service, gateway, _ = build_service()
+    async def test_the_message_is_trimmed(self, build_service: Callable[..., Any]) -> None:
+        service, stack = build_service()
 
         await service.send(CONVERSATION, "  hello  ", CONTEXT)
 
-        assert gateway.requests[0].messages[-1].content == "hello"
+        assert stack.gateway.requests[0].messages[-1].content == "hello"
 
-    async def test_a_blank_prompt_is_rejected_before_a_stream_opens(self) -> None:
+    async def test_a_blank_message_is_rejected_before_a_stream_opens(
+        self, build_service: Callable[..., Any]
+    ) -> None:
         """Failing here still allows a proper HTTP status; failing later does not."""
-        service, gateway, _ = build_service()
+        service, stack = build_service()
 
         with pytest.raises(ValidationError):
             _ = await service.stream(CONVERSATION, "  ", CONTEXT)
 
-        assert not gateway.requests
+        assert not stack.gateway.requests
 
 
-class TestContextAssembly:
-    """The model must see the conversation, and only the conversation."""
+class TestRuntimeFailuresBeforeTheStream:
+    """A runtime refusal must reach the caller as a status code, not an event."""
 
-    async def test_the_first_turn_sends_only_the_new_message(self) -> None:
-        service, gateway, _ = build_service()
+    async def test_an_unregistered_agent_fails_before_the_stream(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(register_agent=False)
 
-        await service.send(CONVERSATION, "first question", CONTEXT)
+        with pytest.raises(NotFoundError):
+            _ = await service.stream(CONVERSATION, "hello", CONTEXT)
 
-        assert [message.content for message in gateway.requests[0].messages] == ["first question"]
+    async def test_a_disabled_agent_fails_before_the_stream(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(is_enabled=False)
 
-    async def test_a_later_turn_sends_the_whole_history(self) -> None:
-        service, gateway, _ = build_service()
-
-        await service.send(CONVERSATION, "first", CONTEXT)
-        await service.send(CONVERSATION, "second", CONTEXT)
-
-        assert [message.content for message in gateway.requests[1].messages] == [
-            "first",
-            "The answer.",
-            "second",
-        ]
-
-    async def test_conversations_do_not_leak_into_each_other(self) -> None:
-        service, gateway, _ = build_service()
-
-        await service.send("conversation-a", "secret", CONTEXT)
-        await service.send("conversation-b", "unrelated", CONTEXT)
-
-        assert [message.content for message in gateway.requests[1].messages] == ["unrelated"]
-
-    async def test_the_system_prompt_is_carried_on_the_request(self) -> None:
-        service, gateway, _ = build_service()
-
-        await service.send(CONVERSATION, "hello", CONTEXT)
-
-        assert gateway.requests[0].system_prompt == "You are a test assistant."
-
-    async def test_the_system_prompt_is_never_stored_as_a_message(self) -> None:
-        """Storing it would replay it as if the user had said it, and freeze it in history."""
-        service, _, memory = build_service()
-
-        await service.send(CONVERSATION, "hello", CONTEXT)
-
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert all(message.role is not MessageRole.SYSTEM for message in stored)
-
-    async def test_the_model_comes_from_configuration(self) -> None:
-        service, gateway, _ = build_service()
-
-        await service.send(CONVERSATION, "hello", CONTEXT)
-
-        assert gateway.requests[0].model_id == "test-model"
+        with pytest.raises(PolicyViolationError):
+            _ = await service.stream(CONVERSATION, "hello", CONTEXT)
 
 
-class TestRecording:
-    async def test_a_completed_turn_stores_both_messages(self) -> None:
-        service, _, memory = build_service()
+class TestCompleteTurns:
+    async def test_a_turn_returns_the_answer(self, build_service: Callable[..., Any]) -> None:
+        service, _ = build_service()
 
-        await service.send(CONVERSATION, "question", CONTEXT)
+        turn = await service.send(CONVERSATION, "question", CONTEXT)
 
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [(message.role, message.content) for message in stored] == [
-            (MessageRole.USER, "question"),
-            (MessageRole.ASSISTANT, "The answer."),
-        ]
+        assert turn.message.content == "The answer."
+        assert turn.conversation_id == CONVERSATION
 
-    async def test_a_failed_turn_does_not_store_an_assistant_message(self) -> None:
-        service, _, memory = build_service(FakeGateway(failure=ProviderError("upstream down")))
+    async def test_the_serving_model_and_provider_are_reported(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
 
-        with pytest.raises(ProviderError):
-            await service.send(CONVERSATION, "question", CONTEXT)
+        turn = await service.send(CONVERSATION, "question", CONTEXT)
 
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert all(message.role is not MessageRole.ASSISTANT for message in stored)
+        assert turn.model_id == "test-model"
+        assert turn.provider_id == "fake"
 
-    async def test_history_returns_what_was_stored(self) -> None:
-        service, _, _ = build_service()
+    async def test_usage_is_reported(self, build_service: Callable[..., Any]) -> None:
+        service, _ = build_service()
+
+        turn = await service.send(CONVERSATION, "question", CONTEXT)
+
+        assert turn.usage.prompt_tokens == 10
+        assert turn.usage.completion_tokens == 5
+
+
+class TestConversationState:
+    async def test_history_returns_what_the_runtime_stored(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
         await service.send(CONVERSATION, "question", CONTEXT)
 
         history = await service.history(CONVERSATION, CONTEXT)
 
-        assert history.conversation_id == CONVERSATION
-        assert len(history.messages) == 2
+        assert [message.content for message in history.messages] == ["question", "The answer."]
 
-    async def test_an_unknown_conversation_has_an_empty_history(self) -> None:
-        service, _, _ = build_service()
+    async def test_an_unknown_conversation_is_empty(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
 
-        history = await service.history("never-seen", CONTEXT)
+        assert (await service.history("never-seen", CONTEXT)).is_empty
 
-        assert history.is_empty
-
-    async def test_clearing_forgets_the_conversation(self) -> None:
-        service, _, _ = build_service()
+    async def test_clearing_forgets_the_conversation(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
         await service.send(CONVERSATION, "question", CONTEXT)
 
         await service.clear(CONVERSATION, CONTEXT)
@@ -306,8 +181,10 @@ class TestRecording:
 
 
 class TestStreaming:
-    async def test_the_event_sequence_is_started_deltas_completed(self) -> None:
-        service, _, _ = build_service(FakeGateway(chunks=("Hello", " ", "world")))
+    async def test_the_event_sequence_is_started_deltas_completed(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(chunks=("Hello", " ", "world"))
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
@@ -315,8 +192,10 @@ class TestStreaming:
         assert all(isinstance(event, ChatDeltaEvent) for event in events[1:-1])
         assert isinstance(events[-1], ChatCompletedEvent)
 
-    async def test_deltas_reassemble_into_the_completed_content(self) -> None:
-        service, _, _ = build_service(FakeGateway(chunks=("Hello", " ", "world")))
+    async def test_deltas_reassemble_into_the_completed_content(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(chunks=("Hello", " ", "world"))
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
@@ -324,9 +203,11 @@ class TestStreaming:
         completed = next(event for event in events if isinstance(event, ChatCompletedEvent))
         assert deltas == completed.content == "Hello world"
 
-    async def test_the_message_id_is_stable_across_the_stream(self) -> None:
+    async def test_the_message_id_is_stable_across_the_stream(
+        self, build_service: Callable[..., Any]
+    ) -> None:
         """A client creates the element on `started` and reconciles it on `completed`."""
-        service, _, _ = build_service()
+        service, _ = build_service()
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
@@ -334,34 +215,35 @@ class TestStreaming:
         completed = next(event for event in events if isinstance(event, ChatCompletedEvent))
         assert started.message_id == completed.message_id
 
-    async def test_a_streamed_turn_is_recorded(self) -> None:
-        service, _, memory = build_service(FakeGateway(chunks=("one", " two")))
-
-        _ = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
-
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == ["hi", "one two"]
-
-    async def test_usage_is_reported_on_completion(self) -> None:
-        service, _, _ = build_service()
+    async def test_the_started_event_reports_the_resolved_model(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
-        completed = next(event for event in events if isinstance(event, ChatCompletedEvent))
-        assert completed.usage.completion_tokens == 5
-        assert completed.finish_reason == "stop"
+        assert isinstance(events[0], ChatStartedEvent)
+        assert events[0].model_id == "test-model"
+
+    async def test_a_streamed_turn_is_recorded(self, build_service: Callable[..., Any]) -> None:
+        service, _ = build_service(chunks=("one", " two"))
+
+        _ = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
+
+        history = await service.history(CONVERSATION, CONTEXT)
+        assert [message.content for message in history.messages] == ["hi", "one two"]
 
 
 class TestStreamFailures:
     """A stream that has sent bytes cannot change its HTTP status."""
 
-    async def test_a_failure_after_the_stream_opens_becomes_an_error_event(self) -> None:
-        service, _, _ = build_service(
-            FakeGateway(
-                chunks=("partial", " answer"),
-                failure=ProviderError("upstream died"),
-                fail_after_chunks=1,
-            )
+    async def test_a_failure_after_the_stream_opens_becomes_an_error_event(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(
+            chunks=("partial", " never sent"),
+            failure=ProviderError("upstream died"),
+            fail_after_chunks=1,
         )
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
@@ -369,16 +251,18 @@ class TestStreamFailures:
         assert isinstance(events[-1], ChatErrorEvent)
         assert events[-1].message == "upstream died"
 
-    async def test_a_failing_stream_does_not_raise(self) -> None:
-        """Raising mid-stream would abort the response with no explanation for the client."""
-        service, _, _ = build_service(FakeGateway(failure=ProviderError("down")))
+    async def test_a_failing_stream_does_not_raise(self, build_service: Callable[..., Any]) -> None:
+        """Raising mid-stream would abort the response with no explanation."""
+        service, _ = build_service(failure=ProviderError("down"))
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
         assert isinstance(events[-1], ChatErrorEvent)
 
-    async def test_the_error_event_carries_the_correlation_id(self) -> None:
-        service, _, _ = build_service(FakeGateway(failure=ProviderError("down")))
+    async def test_the_error_event_carries_the_correlation_id(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service(failure=ProviderError("down"))
         context = ExecutionContext(correlation_id="corr-123")
 
         events = [event async for event in await service.stream(CONVERSATION, "hi", context)]
@@ -386,95 +270,79 @@ class TestStreamFailures:
         error = next(event for event in events if isinstance(event, ChatErrorEvent))
         assert error.correlation_id == "corr-123"
 
-    async def test_text_generated_before_a_failure_is_kept(self) -> None:
+    async def test_text_generated_before_a_failure_is_kept(
+        self, build_service: Callable[..., Any]
+    ) -> None:
         """The user has already read it; a history that omits it is more confusing."""
-        service, _, memory = build_service(
-            FakeGateway(
-                chunks=("partial", " answer"),
-                failure=ProviderError("died"),
-                fail_after_chunks=1,
-            )
+        service, _ = build_service(
+            chunks=("partial", " never sent"),
+            failure=ProviderError("died"),
+            fail_after_chunks=1,
         )
 
         _ = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
 
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == ["hi", "partial"]
-
-    async def test_the_question_is_recorded_even_when_nothing_was_generated(self) -> None:
-        """A retry needs the history, and the user should see what they asked."""
-        service, _, memory = build_service(FakeGateway(failure=ProviderError("down")))
-
-        _ = [event async for event in await service.stream(CONVERSATION, "hi", CONTEXT)]
-
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == ["hi"]
-
-
-class TestStopGeneration:
-    """Stopping is the consumer closing the iterator."""
-
-    async def test_a_partial_answer_is_stored_when_the_client_stops(self) -> None:
-        service, _, memory = build_service(FakeGateway(chunks=("one", " two", " three", " four")))
-
-        stream = await service.stream(CONVERSATION, "hi", CONTEXT)
-        collected: list[str] = []
-        async for event in stream:
-            if isinstance(event, ChatDeltaEvent):
-                collected.append(event.delta)
-                if len(collected) == 2:
-                    break
-        await stream.aclose()
-
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == ["hi", "one two"]
+        history = await service.history(CONVERSATION, CONTEXT)
+        assert [message.content for message in history.messages] == ["hi", "partial"]
 
 
 class TestRegeneration:
-    async def test_it_re_answers_the_last_user_message(self) -> None:
-        service, gateway, _ = build_service()
+    async def test_it_re_answers_the_last_user_message(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, stack = build_service()
         await service.send(CONVERSATION, "the question", CONTEXT)
 
         _ = [event async for event in await service.regenerate(CONVERSATION, CONTEXT)]
 
-        assert gateway.requests[-1].messages[-1].content == "the question"
+        assert stack.gateway.requests[-1].messages[-1].content == "the question"
 
-    async def test_the_discarded_answer_is_not_used_as_context(self) -> None:
+    async def test_the_discarded_answer_is_not_used_as_context(
+        self, build_service: Callable[..., Any]
+    ) -> None:
         """Otherwise each regeneration continues the answer it was meant to replace."""
-        service, gateway, _ = build_service()
+        service, stack = build_service()
         await service.send(CONVERSATION, "the question", CONTEXT)
 
         _ = [event async for event in await service.regenerate(CONVERSATION, CONTEXT)]
 
-        contents = [message.content for message in gateway.requests[-1].messages]
-        assert contents == ["the question"]
+        assert [message.content for message in stack.gateway.requests[-1].messages] == [
+            "the question"
+        ]
 
-    async def test_the_question_is_not_duplicated_in_history(self) -> None:
-        service, _, memory = build_service()
+    async def test_the_question_is_not_duplicated_in_history(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
         await service.send(CONVERSATION, "the question", CONTEXT)
 
         _ = [event async for event in await service.regenerate(CONVERSATION, CONTEXT)]
 
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == ["the question", "The answer."]
+        history = await service.history(CONVERSATION, CONTEXT)
+        assert [message.content for message in history.messages] == [
+            "the question",
+            "The answer.",
+        ]
 
-    async def test_earlier_turns_survive_a_regeneration(self) -> None:
-        service, _, memory = build_service()
+    async def test_earlier_turns_survive(self, build_service: Callable[..., Any]) -> None:
+        service, _ = build_service()
         await service.send(CONVERSATION, "first", CONTEXT)
         await service.send(CONVERSATION, "second", CONTEXT)
 
         _ = [event async for event in await service.regenerate(CONVERSATION, CONTEXT)]
 
-        stored = await memory.load(CONVERSATION, CONTEXT)
-        assert [message.content for message in stored] == [
-            "first",
-            "The answer.",
-            "second",
-            "The answer.",
+        history = await service.history(CONVERSATION, CONTEXT)
+        assert [message.role for message in history.messages] == [
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
         ]
 
-    async def test_regenerating_an_empty_conversation_is_rejected(self) -> None:
-        service, _, _ = build_service()
+    async def test_regenerating_an_empty_conversation_is_rejected(
+        self, build_service: Callable[..., Any]
+    ) -> None:
+        service, _ = build_service()
 
         with pytest.raises(ValidationError, match="no message to regenerate"):
             _ = await service.regenerate("never-seen", CONTEXT)

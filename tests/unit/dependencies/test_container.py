@@ -19,6 +19,7 @@ from agent_platform.configuration.settings import (
 from agent_platform.dependencies.container import ApplicationContainer, build_llm_providers
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
+from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
@@ -129,9 +130,10 @@ class TestChatWiring:
         service = container.chat_service()
 
         assert isinstance(service, ChatService)
-        # Depends on the protocols, never on DefaultLLMGateway or a concrete
-        # memory implementation.
-        assert isinstance(service._gateway, LLMGateway)  # noqa: SLF001 - asserting wiring
+        # Since Milestone 03 the service delegates execution to the runtime and
+        # calls no gateway of its own. It keeps memory only for the transcript
+        # endpoints, which are conversation management rather than execution.
+        assert isinstance(service._runtime, AgentRuntime)  # noqa: SLF001 - asserting wiring
         assert isinstance(service._memory, MemoryProvider)  # noqa: SLF001
 
     def test_memory_is_shared_across_resolutions(self, container: ApplicationContainer) -> None:
