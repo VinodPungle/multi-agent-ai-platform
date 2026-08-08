@@ -172,6 +172,13 @@ export async function request<T>(
       throw await toApiError(response, correlationId);
     }
 
+    // 204/205 carry no body by definition, so there is nothing to parse.
+    // Without this, `response.json()` throws on the empty body and a perfectly
+    // successful DELETE surfaces as a network failure.
+    if (response.status === 204 || response.status === 205) {
+      return schema.parse(undefined);
+    }
+
     const payload: unknown = await response.json();
     const parsed = schema.safeParse(payload);
 

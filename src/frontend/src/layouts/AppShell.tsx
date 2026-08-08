@@ -11,7 +11,9 @@
  */
 
 import type { ReactNode } from 'react';
+import { NavLink } from 'react-router-dom';
 
+import { ThemeToggle } from '@/app/theme';
 import { env } from '@/config/env';
 import { cn } from '@/utils/cn';
 
@@ -24,7 +26,7 @@ interface NavigationItem {
 
 const navigation: readonly NavigationItem[] = [
   { label: 'Overview', href: '/' },
-  { label: 'Chat', milestone: 'M02' },
+  { label: 'Chat', href: '/chat' },
   { label: 'Agents', milestone: 'M03' },
   { label: 'Tools', milestone: 'M04' },
   { label: 'Models', milestone: 'M05' },
@@ -51,18 +53,25 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4">
           <span className="text-sm font-semibold tracking-tight">{env.VITE_APP_NAME}</span>
 
-          <nav aria-label="Platform modules">
+          <nav aria-label="Platform modules" className="flex-1">
             <ul className="flex flex-wrap items-center gap-1">
               {navigation.map((item) => (
                 <li key={item.label}>
                   {item.href ? (
-                    <a
-                      href={item.href}
-                      aria-current="page"
-                      className="rounded-md px-2.5 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+                    <NavLink
+                      to={item.href}
+                      // `end` on the root route only, or "Overview" stays
+                      // highlighted on every page beneath it.
+                      end={item.href === '/'}
+                      className={({ isActive }) =>
+                        cn(
+                          'rounded-md px-2.5 py-1.5 text-sm font-medium hover:bg-muted',
+                          isActive ? 'bg-muted text-foreground' : 'text-muted-foreground',
+                        )
+                      }
                     >
                       {item.label}
-                    </a>
+                    </NavLink>
                   ) : (
                     <span
                       aria-disabled="true"
@@ -76,6 +85,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </ul>
           </nav>
+
+          <ThemeToggle />
         </div>
       </header>
 

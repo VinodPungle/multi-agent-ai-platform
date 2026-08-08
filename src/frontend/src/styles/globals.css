@@ -38,12 +38,20 @@
 /*
  * Dark theme.
  *
- * Driven by the operating system preference alone in Milestone 01; a user-facing
- * toggle arrives with Settings. Only token values change — no component needs a
- * dark-specific rule.
+ * Three states, and the CSS has to express all three (see `app/theme.tsx`):
+ *
+ *   no `data-theme`      follow the OS
+ *   data-theme="dark"    forced dark, whatever the OS says
+ *   data-theme="light"   forced light, whatever the OS says
+ *
+ * The media query is therefore guarded with `:not([data-theme='light'])`, or an
+ * explicit light choice would be overridden by a dark OS setting — the toggle
+ * would appear to work in one direction only.
+ *
+ * Only token values change. No component carries a dark-specific rule.
  */
 @media (prefers-color-scheme: dark) {
-  @theme {
+  html:not([data-theme='light']) {
     --color-background: hsl(222 47% 8%);
     --color-foreground: hsl(210 40% 96%);
 
@@ -64,9 +72,86 @@
   }
 }
 
+html[data-theme='dark'] {
+  --color-background: hsl(222 47% 8%);
+  --color-foreground: hsl(210 40% 96%);
+
+  --color-card: hsl(222 40% 11%);
+  --color-card-foreground: hsl(210 40% 96%);
+
+  --color-muted: hsl(217 33% 17%);
+  --color-muted-foreground: hsl(215 20% 65%);
+
+  --color-border: hsl(217 33% 20%);
+
+  --color-primary: hsl(217 91% 65%);
+  --color-primary-foreground: hsl(222 47% 11%);
+
+  --color-success: hsl(142 69% 58%);
+  --color-warning: hsl(38 92% 60%);
+  --color-danger: hsl(0 84% 68%);
+}
+
 html {
-  /* Respects the OS setting for form controls, scrollbars and other UA chrome. */
+  /* Respects the OS setting for form controls, scrollbars and other UA chrome.
+     Overridden per-preference by `applyPreference` in `app/theme.tsx`. */
   color-scheme: light dark;
+}
+
+/*
+ * Syntax highlighting.
+ *
+ * `rehype-highlight` only attaches classes; the colours are ours. Written
+ * against the same tokens as the rest of the UI rather than importing one of
+ * highlight.js's themes, because those ship fixed hex values that ignore the
+ * theme and look wrong in one mode or the other.
+ *
+ * A deliberately small palette: comments recede, literals and keywords are
+ * distinguishable, everything else inherits. Colour is never the only signal.
+ */
+.hljs-comment,
+.hljs-quote {
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+  color: var(--color-success);
+}
+
+.hljs-number,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-regexp,
+.hljs-link {
+  color: var(--color-warning);
+}
+
+.hljs-deletion,
+.hljs-meta {
+  color: var(--color-danger);
+}
+
+.hljs-emphasis {
+  font-style: italic;
 }
 
 body {

@@ -89,8 +89,17 @@ describe('App shell', () => {
     // The roadmap stays visible without pretending the routes exist.
     renderWithProviders(<App />);
 
-    expect(screen.getByText('Chat')).toHaveAttribute('aria-disabled', 'true');
+    // Agents arrives in Milestone 03. Chat was disabled here until Milestone 02
+    // delivered it — the assertion moved rather than being deleted, so the
+    // roadmap behaviour stays covered as modules land.
+    expect(screen.getByText('Agents')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('link', { name: 'Overview' })).toBeInTheDocument();
+  });
+
+  it('links to the modules that have been delivered', () => {
+    renderWithProviders(<App />);
+
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat');
   });
 
   it('renders without writing to the console', async () => {
