@@ -2,10 +2,16 @@
 
 Operational procedures for diagnosing and resolving production incidents.
 
+## Available
+
+| Runbook | Covers |
+| --- | --- |
+| [Azure AI Foundry setup](./azure-ai-foundry-setup.md) | Connecting a deployment, RBAC, keyless auth, scale-to-zero, troubleshooting |
+
 ## Not yet populated
 
-Milestone 01 has no production deployment, so there is nothing to operate.
-Runbooks land with the systems they cover:
+There is no production deployment yet, so there is little to operate. The rest
+land with the systems they cover:
 
 | Runbook | Milestone |
 | --- | --- |

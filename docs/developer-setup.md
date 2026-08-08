@@ -458,15 +458,62 @@ silently.
 
 ---
 
-## 9. Azure (Milestone 05+)
+## 9. Azure — local authentication
 
-Not required yet. Azure services are reached with `DefaultAzureCredential`, so
-local development authenticates through the Azure CLI and needs no API key:
+Optional. The mock provider answers chat without any Azure access, so everything
+above works on a clone with no subscription.
+
+To talk to a real model, authenticate through the Azure CLI. There is no API key
+setting in this platform and none is accepted:
 
 ```bash
 az login
 az account set --subscription <subscription-id>
 ```
 
-The same code runs in Azure under Managed Identity, unchanged. Deployment
-(`azd up`) lands in Milestone 06; see [`../infra/README.md`](../infra/README.md).
+That is the whole local setup. `DefaultAzureCredential` finds the CLI session,
+and the same code runs in Azure under Managed Identity with no configuration
+switch and no second code path — which is why "it authenticated locally" is
+evidence that it will authenticate deployed.
+
+### Enabling the provider
+
+```dotenv
+PLATFORM_AZURE_FOUNDRY__ENABLED=true
+PLATFORM_AZURE_FOUNDRY__ENDPOINT=https://<resource>.services.ai.azure.com/models
+PLATFORM_AZURE_FOUNDRY__DEPLOYMENT=<deployment-name>
+PLATFORM_AGENT__PROVIDER_ID=azure-foundry
+PLATFORM_AGENT__MODEL_ID=<model-id>
+PLATFORM_MOCK_PROVIDER__ENABLED=false
+```
+
+**Every request now costs money.** Keep the mock enabled for day-to-day work and
+switch deliberately.
+
+### Two things that will catch you
+
+**A 401 despite being subscription Owner.** Owner is control plane; calling a
+model is data plane. You need `Cognitive Services User` on the Foundry resource.
+
+**Running in Docker Compose.** The container has no `az login` session. Either
+run the backend directly (Option B) or mount your CLI token cache — the mock
+exists so you rarely need to.
+
+### Verifying it works
+
+```bash
+uv run --package agent-platform python -c "
+from azure.identity import DefaultAzureCredential
+t = DefaultAzureCredential().get_token('https://cognitiveservices.azure.com/.default')
+print('token acquired, expires', t.expires_on)"
+```
+
+A token here without an inference call confirms authentication independently of
+whether a deployment is reachable — and costs nothing.
+
+RBAC commands, endpoint discovery, scale-to-zero behaviour and full
+troubleshooting:
+[`runbooks/azure-ai-foundry-setup.md`](./runbooks/azure-ai-foundry-setup.md).
+
+Deployment (`azd up`) lands in Milestone 06; see
+[`../infra/README.md`](../infra/README.md).

@@ -26,6 +26,9 @@ from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
 from agent_platform.prompts.file_prompt_provider import FilePromptProvider
+from agent_platform.providers.azure_foundry.azure_foundry_provider import (
+    AzureFoundryProvider,
+)
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform.registries import (
     AgentRegistry,
@@ -36,6 +39,7 @@ from agent_platform.registries import (
 from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform.search.duckduckgo_search_provider import DuckDuckGoSearchProvider
 from agent_platform.search.mock_search_provider import MockSearchProvider
+from agent_platform.security.credentials import build_azure_credential
 from agent_platform.tools.internet_search_tool import InternetSearchTool
 from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform.workflow.direct_engine import DirectWorkflowEngine
@@ -81,6 +85,27 @@ def build_llm_providers(settings: PlatformSettings) -> tuple[LLMProvider, ...]:
                 provider_id=settings.mock_provider.provider_id,
                 model_id=settings.mock_provider.model_id,
                 chunk_delay_seconds=settings.mock_provider.chunk_delay_seconds,
+            )
+        )
+
+    if settings.azure_foundry.enabled:
+        azure = settings.azure_foundry
+        llm_providers.append(
+            AzureFoundryProvider(
+                endpoint=azure.endpoint,
+                deployment=azure.deployment,
+                model_id=azure.model_id,
+                # Constructed here, in the composition root, because it is the
+                # only place allowed to build infrastructure. The provider
+                # receives it, so tests never touch the credential chain.
+                credential=build_azure_credential(),
+                provider_id=azure.provider_id,
+                max_context_tokens=azure.max_context_tokens,
+                max_output_tokens=azure.max_output_tokens,
+                input_cost_per_million_tokens=azure.input_cost_per_million_tokens,
+                output_cost_per_million_tokens=azure.output_cost_per_million_tokens,
+                supports_tools=azure.supports_tools,
+                output_token_parameter=azure.output_token_parameter,
             )
         )
 

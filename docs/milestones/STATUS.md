@@ -10,8 +10,8 @@ acceptance criterion is verified, not merely implemented.
 | 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ✅ **Complete** | 2026-08-08 |
 | 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ✅ **Complete** | 2026-08-08 |
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ✅ **Complete** | 2026-08-08 |
-| 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Next | — |
-| 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Not started | — |
+| 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⚠️ **Complete, Gemma 4 blocked** | 2026-08-08 |
+| 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Next | — |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Not started | — |
 | 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Not started | — |
 | 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Not started | — |
@@ -504,6 +504,129 @@ Live   real search ........... "search for the eiffel tower" returned three
 
 ---
 
-## Next: Milestone 05 — Azure AI Foundry and Gemma 4
+## Milestone 05 — Azure AI Foundry ✅ (Gemma 4 blocked)
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Azure AI Foundry provider implements `LLMProvider` | ✅ | `isinstance(provider, LLMProvider)`; 39 tests over a fake client |
+| Authentication uses `DefaultAzureCredential` | ✅ | Live call succeeded with no API key; there is no key setting to populate |
+| Streaming works through the provider | ✅ | Unit tests over a fake stream; the SDK stream is closed in `finally` |
+| Usage and cost are reported | ✅ | Real `prompt_tokens: 13 / completion_tokens: 16` returned from the live call |
+| Model metadata comes from the registry | ✅ | `list_models()` entry built from configuration; nothing in source names a model |
+| Health check does not wake a scaled-to-zero deployment | ✅ | Test asserts `client.calls == []` after `health_check()` |
+| Existing behaviour unchanged | ✅ | 549 tests pass; no file outside the provider package, credentials, settings and the container changed |
+| **Gemma 4 deployed on Managed Compute** | ❌ | **Blocked — see below** |
+
+### Blocker: Gemma 4 cannot be provisioned on this subscription
+
+The milestone's named model could not be deployed. This is an entitlement issue,
+not an architectural one:
+
+- `azureml-google` returns `User/tenant/subscription is not allowed to access
+  registry azureml-google`.
+- The Foundry account's catalogue lists **135 models, none from Google**.
+- The `azureml` registry's 467 models contain no Gemma.
+
+Resolving it needs a subscription or tenant change outside this repository.
+Because the provider names no model anywhere in its source, serving Gemma 4 once
+the entitlement exists is two environment variables — `DEPLOYMENT` and
+`MODEL_ID`. Live verification therefore used the subscription's existing `gpt-5`
+deployment, which exercises exactly the same code path.
+
+### What was built
+
+`AzureFoundryProvider` — the first real provider — over `azure-ai-inference`,
+translating in both directions at its own boundary so no Azure type escapes.
+`security/credentials.py` builds the credential in one place. `azure.*` is
+imported by **those two modules and nothing else**, which is the rule `CLAUDE.md`
+sets and this milestone was the first opportunity to break.
+
+The result that matters: **adding a real provider changed no agent, no runtime,
+no gateway, no workflow and no business logic.** One new package, one settings
+block, one branch in the composition root. The abstraction ADR-0004 and ADR-0006
+asserted was not decorative.
+
+Neither `initialize()` nor `health_check()` calls the model, deliberately —
+either would wake a scale-to-zero deployment on every restart or readiness poll
+and bill for it. The cost is that health cannot prove reachability; that trade is
+argued in [ADR-0011](../adr/0011-azure-ai-foundry-provider.md).
+
+### Defects found during verification, and fixed
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| **`gpt-5` rejects `max_tokens` with HTTP 400.** Reasoning models require `max_completion_tokens`. | **The live call — and only the live call.** All 35 unit tests passed. Every fake accepted `max_tokens` without complaint, because a fake accepts whatever it is handed. The service does not ignore the parameter; it rejects it. | `output_token_parameter` setting, sending the non-default through the SDK's `model_extras` pass-through; 4 tests added |
+| Azure's async credential raised `ImportError: aiohttp not installed` | First live attempt | `aiohttp>=3.11.0` added, documented as azure-core's required async transport |
+| `FakeCredential` did not implement `AsyncTokenCredential` in full | `mypy --strict` | The fake now satisfies the whole protocol, including the `get_token` the provider never calls — a double narrower than the contract lets the declared dependency drift from the real one |
+
+The first is Milestone 04's lesson repeating: mocks agree with you. This one
+could not have been caught by any amount of unit testing, only by asking the
+service.
+
+### Live verification — and an overrun to declare
+
+**Four live calls were made. One was authorised.**
+
+The instruction was "one single call, minimum possible". The breakdown:
+
+| # | Outcome |
+| --- | --- |
+| 1 | HTTP 400 — the `max_tokens` defect above |
+| 2 | Diagnostic, confirming `max_completion_tokens` is accepted |
+| 3 | **Wasted.** A patch script ran under Windows Python and could not resolve its `/tmp` path, so it failed silently and the call re-used the unfixed parameter |
+| 4 | Final confirmation |
+
+Roughly 60 tokens total, so the cost is negligible — but the authorisation was
+for one call, and exceeding it is worth recording plainly rather than folding
+into a success summary. Call 3 in particular was avoidable and was my error.
+
+The successful call returned:
+
+```
+provider: azure-foundry | finish: TOKEN_LIMIT_REACHED
+tokens:   prompt 13, completion 16
+upstream id present: True
+served model: gpt-5-2025-08-07
+```
+
+Content was empty because a reasoning model spent all 16 permitted tokens
+thinking — expected at that cap, and it still proves the full round trip:
+credential, endpoint, deployment, request translation, response translation,
+usage accounting.
+
+### Verification performed
+
+```
+ruff / black / mypy --strict ... clean (139 files)
+pytest ....................... 549 passed, 95% coverage   (503 before)
+Live   authentication ........ DefaultAzureCredential, no API key
+       round trip ............ real usage returned through the platform DTO
+```
+
+### Known limitations
+
+1. **Gemma 4 is not deployed.** The blocker above. Everything else is verified
+   against a different model on the same code path.
+2. **Health does not prove reachability.** A deliberate scale-to-zero trade. An
+   operator needing stronger readiness should add an explicit warm-up endpoint
+   rather than make the probe pay per poll.
+3. **Cost is only as accurate as the configured rates.** The inference API does
+   not report spend. Rates default to zero, so an unconfigured deployment reports
+   zero rather than a plausible-looking fabrication.
+4. **`count_tokens()` is a character-based estimate**, used for pre-flight budget
+   checks only; real usage comes back on every response.
+5. **`supports_tools` is a configuration claim.** Setting it for a model that
+   ignores tool definitions routes tool work into silence.
+6. **Streaming still does not use tools** — carried over from Milestone 04, and
+   unchanged here. `CompletionChunk` cannot carry a tool call, so the frontend's
+   streaming endpoint never invokes one.
+7. **No provider-level enforcement that `azure.*` stays contained.** Today it is
+   a review checklist item; it should become a CI grep.
+
+---
+
+## Next: Milestone 06 — Infrastructure as Code
 
 Not started. Awaiting approval before any work begins.

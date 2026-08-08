@@ -20,6 +20,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0008](./0008-server-sent-events-for-streaming-chat.md) | Stream chat over server-sent events, consumed with `fetch` | Accepted | 02 |
 | [0009](./0009-agent-runtime-and-workflow-engine-abstraction.md) | An Agent Runtime, with LangGraph behind a workflow abstraction | Accepted | 03 |
 | [0010](./0010-tool-framework-and-internet-search.md) | A tool framework, with the loop in the workflow layer | Accepted | 04 |
+| [0011](./0011-azure-ai-foundry-provider.md) | The Azure AI Foundry provider, and keyless authentication | Accepted | 05 |
 
 ## Writing one
 

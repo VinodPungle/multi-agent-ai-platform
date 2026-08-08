@@ -22,6 +22,7 @@ an hour earlier.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal, Self
@@ -36,6 +37,7 @@ from agent_platform_sdk.policies.timeout import TimeoutPolicy
 __all__ = [
     "AgentSettings",
     "AppSettings",
+    "AzureFoundrySettings",
     "ChatSettings",
     "Environment",
     "FeatureFlagSettings",
@@ -300,6 +302,117 @@ class MockProviderSettings(BaseModel):
     )
 
 
+class AzureFoundrySettings(BaseModel):
+    """Azure AI Foundry connection and model metadata.
+
+    No API key appears here, and none is accepted. Authentication is
+    `DefaultAzureCredential` — Azure CLI locally, Managed Identity in Azure —
+    which is what `CLAUDE.md` requires and what removes the whole class of
+    "secret committed to the repository" incidents.
+
+    Model identity is configuration end to end: `deployment` selects what
+    answers, and nothing in the source names a model. Pointing the platform at
+    Gemma 4, GPT, DeepSeek or Cohere is an environment variable.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Register the Azure AI Foundry provider. Defaults to false so a clone "
+            "with no Azure access starts cleanly; the deployment that needs it "
+            "turns it on, in the same posture as `app.debug`."
+        ),
+    )
+    endpoint: str = Field(
+        default="",
+        description=(
+            "Foundry inference endpoint, e.g. "
+            "https://<resource>.services.ai.azure.com/models — copied from the "
+            "Foundry portal. A resource identifier, not a secret."
+        ),
+    )
+    deployment: str = Field(
+        default="",
+        description=(
+            "Deployment name to invoke. This is the *deployment* name from the "
+            "portal, which is frequently not the model name — the single most "
+            "common cause of a 404 here."
+        ),
+    )
+    model_id: str = Field(
+        default="gemma-4",
+        min_length=1,
+        description="Platform-wide model id this deployment serves.",
+    )
+    provider_id: str = Field(default="azure-foundry", min_length=1)
+
+    max_context_tokens: int = Field(default=128_000, gt=0)
+    max_output_tokens: int = Field(default=4_096, gt=0)
+
+    supports_tools: bool = Field(
+        default=True,
+        description=(
+            "Whether the deployed model can call tools. Varies by model, not by "
+            "provider: claiming it for a model that ignores tool definitions "
+            "would route tool work into silence."
+        ),
+    )
+
+    output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = Field(
+        default="max_tokens",
+        description=(
+            "Which parameter caps generated tokens. Reasoning models reject "
+            "`max_tokens` outright and require `max_completion_tokens` — a live "
+            "call returned HTTP 400 where every mock had accepted it."
+        ),
+    )
+
+    input_cost_per_million_tokens: Decimal = Field(
+        default=Decimal(0),
+        ge=0,
+        description=(
+            "Published input rate. Defaults to zero so an unconfigured deployment "
+            "reports zero cost rather than a fabricated number that would reach "
+            "cost dashboards looking real."
+        ),
+    )
+    output_cost_per_million_tokens: Decimal = Field(default=Decimal(0), ge=0)
+
+    cold_start_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "Budget for the first request to a Managed Compute deployment that has "
+            "scaled to zero. Generous on purpose: an instance start takes tens of "
+            "seconds, and a tight timeout makes every cold start look like an outage."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_connection_details_when_enabled(self) -> Self:
+        """Fail at startup when the provider is on but unconfigured.
+
+        The alternative is a platform that starts happily and fails every chat
+        request with a connection error that names nothing useful.
+        """
+        if not self.enabled:
+            return self
+
+        missing = [
+            name
+            for name, value in (("endpoint", self.endpoint), ("deployment", self.deployment))
+            if not value.strip()
+        ]
+        if missing:
+            fields = ", ".join(f"azure_foundry.{name}" for name in missing)
+            message = f"Azure AI Foundry is enabled but {fields} is not set."
+            raise ValueError(message)
+
+        return self
+
+
 class SearchSettings(BaseModel):
     """Which search backend answers the internet-search tool.
 
@@ -542,6 +655,7 @@ class PlatformSettings(BaseSettings):
     search: SearchSettings = Field(default_factory=SearchSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     mock_provider: MockProviderSettings = Field(default_factory=MockProviderSettings)
+    azure_foundry: AzureFoundrySettings = Field(default_factory=AzureFoundrySettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)
 
