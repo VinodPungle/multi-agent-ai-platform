@@ -1,0 +1,255 @@
+# =============================================================================
+# Continuous Deployment
+# =============================================================================
+# Provisions infrastructure and deploys both services to one environment.
+#
+# Manual by design. `workflow_dispatch` with an environment choice, rather than
+# deploy-on-merge: this platform bills per model call and per provisioned
+# throughput, and an accidental production deployment is not recoverable by
+# reverting a commit. Milestone 08 can make development automatic once there is
+# an environment cheap enough to redeploy carelessly.
+#
+# Authentication
+#   OIDC federated credentials. There is no service principal secret in this
+#   repository — nothing to store, rotate or leak. GitHub presents a short-lived
+#   token that Entra ID exchanges for an access token scoped to this repository
+#   and this environment. That is the same argument that removed API keys from
+#   the application itself, applied to the pipeline.
+#
+# Approvals
+#   Enforced by GitHub Environments, not by this file. An environment with
+#   required reviewers pauses the job before it runs. Configure them once:
+#   see docs/runbooks/ci-cd.md.
+# =============================================================================
+
+name: CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment.
+        type: choice
+        required: true
+        options: [development, testing, staging, production]
+        default: development
+      skip-quality-gates:
+        description: Skip tests. For redeploying a commit that has already passed.
+        type: boolean
+        default: false
+
+# One deployment per environment at a time. Two concurrent runs against the same
+# environment race on the same resources, and `cancel-in-progress` is wrong here
+# — cancelling a deployment halfway leaves it partly applied.
+concurrency:
+  group: cd-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Quality gates
+    if: ${{ !inputs.skip-quality-gates }}
+    uses: ./.github/workflows/reusable-test.yml
+    permissions:
+      contents: read
+    with:
+      # The artefacts matter on a pull request, where someone reads them. On a
+      # deployment they are noise.
+      upload-artifacts: false
+
+  # ---------------------------------------------------------------------------
+  provision:
+    name: Provision (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [quality]
+    # `always()` plus an explicit failure check: the job must still run when
+    # `quality` was skipped, but must not run when it ran and failed.
+    if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+
+    # The GitHub Environment. This is what enforces required reviewers, and
+    # where the environment's secrets and variables live.
+    environment:
+      name: ${{ inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      registry: ${{ steps.outputs.outputs.registry }}
+      backend-uri: ${{ steps.outputs.outputs.backend-uri }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v2
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign azd in with the same federated identity
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --federated-credential-provider github \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+      - name: Select the environment
+        # `azd env new` is idempotent enough for this: it selects the
+        # environment when it already exists.
+        run: |
+          azd env new "${{ vars.AZURE_ENV_NAME }}" --no-prompt --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" --location "${{ vars.AZURE_LOCATION }}" || \
+            azd env select "${{ vars.AZURE_ENV_NAME }}"
+
+      - name: Apply environment configuration
+        # Non-secret settings come from environment *variables*, secrets from
+        # environment *secrets*. The Tavily key is only set when present, so a
+        # development environment without one is not forced to invent it.
+        run: |
+          azd env set PLATFORM_DEPLOYMENT_ENVIRONMENT "${{ inputs.environment }}"
+          azd env set PLATFORM_SEARCH_PROVIDER "${{ vars.PLATFORM_SEARCH_PROVIDER }}"
+          if [ -n "${TAVILY_API_KEY:-}" ]; then
+            azd env set TAVILY_API_KEY "${TAVILY_API_KEY}"
+          fi
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+      - name: Provision infrastructure
+        run: azd provision --no-prompt
+
+      - name: Collect deployment outputs
+        id: outputs
+        # Read from the azd environment rather than parsed from log output,
+        # which changes format between versions.
+        run: |
+          registry=$(azd env get-value AZURE_CONTAINER_REGISTRY_ENDPOINT)
+          backend=$(azd env get-value SERVICE_BACKEND_URI)
+          echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+          echo "backend-uri=${backend}" >> "$GITHUB_OUTPUT"
+          echo "Registry: ${registry}"
+          echo "Backend:  ${backend}"
+
+  # ---------------------------------------------------------------------------
+  images:
+    name: Build and publish images
+    needs: [provision]
+    uses: ./.github/workflows/reusable-build.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    with:
+      push: true
+      registry: ${{ needs.provision.outputs.registry }}
+      image-tag: ${{ github.sha }}
+      # The real backend URL, known only after provisioning. Vite bakes it into
+      # the bundle at build time; built with the default, the deployed UI calls
+      # http://localhost:8000 and every request goes to the user's own machine.
+      backend-api-url: ${{ needs.provision.outputs.backend-uri }}
+    secrets:
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [provision, images]
+
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.urls.outputs.frontend }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v2
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign azd in with the same federated identity
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --federated-credential-provider github \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+      - name: Select the environment
+        run: azd env select "${{ vars.AZURE_ENV_NAME }}"
+
+      - name: Deploy services
+        run: azd deploy --no-prompt
+
+      - name: Read the deployed URLs
+        id: urls
+        run: |
+          frontend=$(azd env get-value SERVICE_FRONTEND_URI)
+          backend=$(azd env get-value SERVICE_BACKEND_URI)
+          echo "frontend=${frontend}" >> "$GITHUB_OUTPUT"
+          echo "backend=${backend}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        # A deployment that reports success and serves errors is worse than one
+        # that fails: nobody investigates a green pipeline. Readiness is checked
+        # rather than liveness, because liveness passes before the platform can
+        # actually answer.
+        run: |
+          set -eu
+          backend="${{ steps.urls.outputs.backend }}"
+          frontend="${{ steps.urls.outputs.frontend }}"
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail "${backend}/ready" > /dev/null; then
+              echo "Backend ready after ${attempt} attempt(s)."
+              break
+            fi
+            if [ "${attempt}" -eq 30 ]; then
+              echo "Backend never became ready. Health report:"
+              curl --silent "${backend}/health" || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+          curl --silent --fail "${frontend}/healthz" > /dev/null
+          echo "Frontend healthy."
+
+          echo "Component health:"
+          curl --silent "${backend}/health"
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Deployment: ${{ inputs.environment }}"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Frontend | ${{ steps.urls.outputs.frontend }} |"
+            echo "| Backend | ${{ steps.urls.outputs.backend }} |"
+            echo "| Image tag | \`${{ github.sha }}\` |"
+            echo
+            echo "Rollback: see docs/runbooks/ci-cd.md."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,208 @@
+# =============================================================================
+# Continuous Integration
+# =============================================================================
+# Every gate the handbook requires of a change: formatting, linting, type
+# checking, tests, container builds, image scanning and infrastructure
+# validation.
+#
+# The quality and image jobs come from reusable workflows shared with the
+# deployment pipeline, so a release cannot pass checks a pull request would have
+# failed. Duplicated, they drift — and the drift always favours the release
+# pipeline, because that is the one under time pressure.
+#
+# Triggers
+#   Also on feature branches, not only main. That is not a convenience: with
+#   triggers limited to main and pull requests to it, six milestones of work on
+#   a long-lived feature branch produced exactly zero CI runs. A gate nothing
+#   reaches is not a gate.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'fix/**'
+      - 'refactor/**'
+      - 'infra/**'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run for the same ref. Queuing obsolete runs
+# wastes minutes and delays feedback on the commit that matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Quality gates
+    uses: ./.github/workflows/reusable-test.yml
+    permissions:
+      contents: read
+
+  # ---------------------------------------------------------------------------
+  images:
+    name: Container images
+    uses: ./.github/workflows/reusable-build.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    with:
+      # Build and verify only. Publication belongs to the deployment pipeline,
+      # which knows which registry and which environment.
+      push: false
+      image-tag: ci-${{ github.sha }}
+
+  # ---------------------------------------------------------------------------
+  infrastructure:
+    name: Infrastructure validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep
+          sudo mv bicep /usr/local/bin/bicep
+          bicep --version
+
+      - name: Lint Bicep templates
+        # `--stdout` discards the compiled ARM output: this step checks the
+        # templates are valid, it does not produce a deployment artefact.
+        # `find -exec` rather than a loop over its output: word splitting on a
+        # path containing a space would silently lint the wrong thing, or
+        # nothing. shellcheck SC2044, reported by actionlint on the runner.
+        run: |
+          find infra/bicep -name '*.bicep' -not -path '*/modules/*' \
+            -exec sh -c 'echo "Linting $1"; bicep build "$1" --stdout > /dev/null' _ {} \;
+
+      - name: Validate environment parameter files
+        # Every environment, not just the default one. A `.bicepparam` that
+        # references a parameter the template no longer has is only discovered
+        # at deploy time otherwise — which is to say, during a deployment.
+        run: |
+          for params in infra/environments/*.bicepparam; do
+            echo "Validating ${params}"
+            bicep build-params "${params}" --stdout > /dev/null
+          done
+
+      - name: Validate azure.yaml
+        run: |
+          python -c "import yaml,pathlib,sys; yaml.safe_load(pathlib.Path('azure.yaml').read_text()); print('azure.yaml is valid YAML')"
+
+      - name: Lint the workflows themselves
+        # The pipeline is code, and it is the only code with no type checker and
+        # no test suite. actionlint catches an undefined expression, a bad
+        # `needs` reference or a wrong action input — all of which otherwise
+        # fail at the least useful moment, mid-run, on the branch that triggered
+        # them.
+        # No inputs: the action takes only `entryPoint` and `args`, and it
+        # already fails the step when it reports anything.
+        uses: rhysd/actionlint@v1.7.7
+
+      - name: Validate the pre-flight scripts
+        # They run before every provision. A syntax error in one is discovered
+        # at the least convenient moment otherwise.
+        run: |
+          sh -n infra/scripts/preflight.sh
+          echo "preflight.sh parses"
+          pwsh -NoProfile -Command "
+            \$errors = \$null
+            [System.Management.Automation.Language.Parser]::ParseFile('infra/scripts/preflight.ps1', [ref]\$null, [ref]\$errors) > \$null
+            if (\$errors.Count -gt 0) { \$errors | ForEach-Object { Write-Error \$_.Message }; exit 1 }
+            Write-Host 'preflight.ps1 parses'
+          "
+
+  # ---------------------------------------------------------------------------
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the filesystem for vulnerabilities and secrets
+        # The published image rather than `trivy-action`. That action downloads
+        # an install script from trivy's `main` branch at run time and executes
+        # it; the script failed on the runner, and nothing here could pin it.
+        # An image tag is a fixed artefact.
+        #
+        # Reports everything; the gate below fails only on what is worth
+        # blocking a merge over.
+        run: |
+          docker run --rm \
+            --volume "${PWD}:/workspace" \
+            --workdir /workspace \
+            "${TRIVY_IMAGE}" fs \
+              --scanners vuln,secret,misconfig \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              --format sarif \
+              --output trivy-results.sarif \
+              --no-progress \
+              .
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.65.0
+
+      - name: Publish results to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: filesystem
+
+      - name: Fail on high or critical findings
+        # Only findings with a fix available. A CVE nobody can remediate
+        # otherwise blocks every build indefinitely and teaches people to bypass
+        # the gate, which costs more security than it buys.
+        run: |
+          docker run --rm \
+            --volume "${PWD}:/workspace" \
+            --workdir /workspace \
+            "${TRIVY_IMAGE}" fs \
+              --scanners vuln,secret \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --no-progress \
+              .
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.65.0
+
+  # ---------------------------------------------------------------------------
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [quality, images, infrastructure, security]
+    if: always()
+
+    steps:
+      - name: Verify every gate passed
+        # One required check for branch protection. Without it, protecting the
+        # branch means listing every job by name and updating that list whenever
+        # the pipeline changes — which is forgotten exactly when a new gate is
+        # added, silently making it optional.
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "One or more gates failed."
+            exit 1
+          fi
+          echo "All gates passed."

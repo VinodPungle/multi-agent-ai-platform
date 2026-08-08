@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "deploymentEnvironment": {
+      "value": "${PLATFORM_DEPLOYMENT_ENVIRONMENT=development}"
+    },
+    "searchProvider": {
+      "value": "${PLATFORM_SEARCH_PROVIDER=duckduckgo}"
+    },
+    "tavilyApiKey": {
+      "value": "${TAVILY_API_KEY=}"
+    },
+    "provisionAiFoundry": {
+      "value": "${PROVISION_AI_FOUNDRY=true}"
+    },
+    "aiFoundryEndpoint": {
+      "value": "${AZURE_AI_FOUNDRY_ENDPOINT=}"
+    },
+    "aiFoundryDeploymentName": {
+      "value": "${AZURE_AI_FOUNDRY_DEPLOYMENT=FW-Kimi-K3}"
+    },
+    "aiFoundryModelFormat": {
+      "value": "${AZURE_AI_FOUNDRY_MODEL_FORMAT=Fireworks}"
+    },
+    "aiFoundryModelName": {
+      "value": "${AZURE_AI_FOUNDRY_MODEL_NAME=FW-Kimi-K3}"
+    },
+    "aiFoundryModelVersion": {
+      "value": "${AZURE_AI_FOUNDRY_MODEL_VERSION=1}"
+    },
+    "platformModelId": {
+      "value": "${PLATFORM_MODEL_ID=fw-kimi-k3}"
+    },
+    "logLevel": {
+      "value": "${PLATFORM_LOG_LEVEL=INFO}"
+    }
+  },
+
+  "//tavilyApiKey": {
+    "note": "Set with `azd env set TAVILY_API_KEY tvly-...`. azd stores it in .azure/<env>/.env, which is git-ignored. The Bicep parameter is @secure(), so it appears in no deployment log or output, and the template writes it to Key Vault rather than to a container's plain environment.",
+    "warning": "Never put the value in this file. It is committed."
+  },
+
+  "//numericParameters": {
+    "note": "logRetentionDays, replica counts, deployment capacity and traceSampleRatio are not bound here. azd substitutes environment variables as strings and ARM rejects a string for an int parameter. Numeric values belong in a per-environment .bicepparam file under infra/environments/, which is typed."
+  },
+
+  "//provisionAiFoundry": {
+    "note": "azd substitutes booleans as strings too. Bicep's parameter coercion accepts 'true'/'false' for a bool, which numeric parameters do not get. Setting PROVISION_AI_FOUNDRY=false and AZURE_AI_FOUNDRY_ENDPOINT=https://... points an environment at an account it does not own."
+  }
+}

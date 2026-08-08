@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------
+# Secrets — never commit. See docs/developer-setup.md.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+azure.local.json
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Test / coverage / type-check caches
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+junit.xml
+
+# uv
+.uv/
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+.npm
+.pnpm-store/
+dist/
+dist-ssr/
+build/
+.vite/
+*.local
+coverage/
+.eslintcache
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# ---------------------------------------------------------------------------
+# Azure / infrastructure
+# ---------------------------------------------------------------------------
+.azure/
+*.bicepparam.local
+infra/**/*.local.json
+
+# ---------------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------------
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# VS Code: workspace configuration is committed (Milestone 01.5).
+# Only per-user overrides are ignored.
+.vscode/*.local.json
+.history/
+
+# ---------------------------------------------------------------------------
+# Logs and temporary output
+# ---------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp/
+.tmp/

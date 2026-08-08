@@ -1,0 +1,60 @@
+# Build context is the repository root for both images. Everything excluded here
+# is either a secret, a host-specific artefact, or dead weight that invalidates
+# layer caches for no reason.
+
+# --- Secrets — must never enter an image layer -------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# --- Version control and CI --------------------------------------------------
+.git
+.github
+.gitignore
+.dockerignore
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Node --------------------------------------------------------------------
+# Host node_modules are platform-specific; the image installs its own.
+**/node_modules/
+**/dist/
+**/coverage/
+**/.vite/
+
+# --- Documentation and tooling not needed at build time ----------------------
+docs/
+infra/
+tools/
+.claude/
+.vscode/
+.devcontainer/
+*.md
+!README.md
+!src/backend/README.md
+!src/sdk/README.md
+!src/shared/README.md
+
+# --- Tests -------------------------------------------------------------------
+# Run in CI against the source tree, not inside the runtime image.
+tests/
+
+# --- Editors and OS ----------------------------------------------------------
+.idea/
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,6 @@
+{
+  // Solution-style root. Application and tooling code have different lib and
+  // module targets, so they are separate projects.
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+}

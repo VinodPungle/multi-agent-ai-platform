@@ -1,0 +1,114 @@
+# =============================================================================
+# Local development environment
+# =============================================================================
+# Milestone 01 acceptance criterion: `docker compose up` starts frontend and
+# backend, with hot reload on both and no manual setup.
+#
+#   docker compose up --build
+#
+#   Frontend  http://localhost:5173
+#   Backend   http://localhost:8000
+#   API docs  http://localhost:8000/docs
+#
+# Host ports are configurable, because 8000 and 5173 are commonly already taken
+# on a developer machine. Set BACKEND_PORT and FRONTEND_PORT in `.env` to move
+# them; the container-side ports never change.
+#
+# Configuration comes from `.env` at the repository root (copy `.env.example`).
+# No secret is ever written into this file.
+# =============================================================================
+
+name: multi-agent-ai-platform
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      target: development
+    image: agent-platform-backend:dev
+    ports:
+      - '${BACKEND_PORT:-8000}:8000'
+    env_file:
+      # Optional so a fresh clone starts before anyone has copied the example
+      # file. Every value below has a working default.
+      - path: .env
+        required: false
+    environment:
+      PLATFORM_APP__ENVIRONMENT: development
+      PLATFORM_APP__DEBUG: 'true'
+      PLATFORM_SERVER__HOST: 0.0.0.0
+      PLATFORM_SERVER__PORT: '8000'
+      # The browser calls the API from the host, so the allowed origin is the
+      # host-mapped frontend port, not the container's internal address.
+      PLATFORM_SERVER__CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173},http://127.0.0.1:${FRONTEND_PORT:-5173}
+      PLATFORM_LOGGING__LEVEL: DEBUG
+      PLATFORM_LOGGING__RENDERER: console
+      PLATFORM_TELEMETRY__ENABLED: 'true'
+      PLATFORM_TELEMETRY__CONSOLE_EXPORTER: 'false'
+      # Answers locally so chat works before Azure AI Foundry lands in
+      # Milestone 05. Set here rather than defaulted on, so the unsafe state is
+      # always one somebody chose — configuration validation rejects it outside
+      # development regardless.
+      PLATFORM_MOCK_PROVIDER__ENABLED: 'true'
+      PLATFORM_FEATURES__STREAMING: 'true'
+      PLATFORM_FEATURES__MEMORY: 'true'
+      # Internet search needs no API key, so it works on a fresh clone.
+      PLATFORM_FEATURES__SEARCH: 'true'
+      PLATFORM_SEARCH__PROVIDER: duckduckgo
+    volumes:
+      # Source is mounted so edits reload without a rebuild. Read-only: a
+      # container must never write into the working tree.
+      - ./src/backend/agent_platform:/app/src/backend/agent_platform:ro
+      - ./src/sdk/agent_platform_sdk:/app/src/sdk/agent_platform_sdk:ro
+      - ./src/shared/agent_platform_shared:/app/src/shared/agent_platform_shared:ro
+      # Prompt assets, so editing one takes effect on reload rather than needing
+      # an image rebuild. Read-only, like the source.
+      - ./prompts:/app/prompts:ro
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/live', timeout=2).status == 200 else 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      target: development
+    image: agent-platform-frontend:dev
+    ports:
+      - '${FRONTEND_PORT:-5173}:5173'
+    environment:
+      # The browser resolves this, not the container, so it must be the
+      # host-mapped address rather than the `backend` service name.
+      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}
+      VITE_APP_NAME: Multi-Agent AI Platform
+      VITE_USE_POLLING: 'true'
+    volumes:
+      - ./src/frontend/src:/app/src:ro
+      - ./src/frontend/index.html:/app/index.html:ro
+      - ./src/frontend/vite.config.ts:/app/vite.config.ts:ro
+      # Anonymous volume shielding the image's Linux-built node_modules from the
+      # host's. Without it the bind mount above would shadow them with binaries
+      # compiled for the wrong platform.
+      #
+      # It also survives `up --build`: Compose reattaches the existing volume, so
+      # a dependency added to package.json is installed into the new image and
+      # still missing at runtime. After adding one, run `docker compose down -v`
+      # first — see the troubleshooting section of docs/developer-setup.md.
+      - /app/node_modules
+    depends_on:
+      backend:
+        # Waits for the backend to pass its health check, so the first page load
+        # does not race a still-starting API.
+        condition: service_healthy
+    restart: unless-stopped

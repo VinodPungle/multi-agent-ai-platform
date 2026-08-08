@@ -1,0 +1,90 @@
+# =============================================================================
+# Azure Developer CLI (azd) configuration
+# =============================================================================
+# Must live at the repository root — azd looks for it there and nowhere else.
+# The Bicep templates it references live under infra/bicep.
+#
+# Deployment workflow (project-spec.md §25):
+#
+#   az login
+#   az account set --subscription <id>
+#   azd up
+#
+# Milestone 06 completes it. `azd up` provisions the resource graph and then
+# builds, pushes and deploys both services into it.
+#
+# Ordering matters and is not incidental: azd provisions first, so infrastructure
+# outputs are in the environment before any image is built. The frontend depends
+# on that, because Vite bakes its API URL into the bundle at build time - see the
+# build arguments below.
+# =============================================================================
+
+name: multi-agent-ai-platform
+metadata:
+  template: multi-agent-ai-platform@0.1.0
+
+# Bicep, not Terraform: the handbook standardises on Bicep and azd.
+infra:
+  provider: bicep
+  path: infra/bicep
+  module: main
+
+services:
+  backend:
+    project: .
+    language: docker
+    host: containerapp
+    docker:
+      path: docker/backend.Dockerfile
+      # Build context is the repository root: the backend is one member of a uv
+      # workspace and needs its siblings' manifests to resolve.
+      context: .
+      target: production
+
+  frontend:
+    project: .
+    language: docker
+    host: containerapp
+    docker:
+      path: docker/frontend.Dockerfile
+      context: .
+      target: production
+      # Vite reads these at *build* time and embeds them in the bundle; a static
+      # site has no runtime configuration. Without this the deployed UI ships
+      # the Dockerfile default, http://localhost:8000, and every request from a
+      # user's browser goes to their own machine.
+      #
+      # SERVICE_BACKEND_URI is a Bicep output, available only because
+      # provisioning runs before build. nginx does not proxy the API, so the
+      # browser calls the backend directly and CORS - configured from the
+      # frontend's URL - is what permits it.
+      buildArgs:
+        - VITE_API_BASE_URL=${SERVICE_BACKEND_URI}
+
+hooks:
+  # Fails fast on what otherwise fails slowly: wrong subscription, an
+  # unregistered resource provider, or insufficient permission discovered
+  # twenty minutes into a deployment.
+  preprovision:
+    posix:
+      shell: sh
+      continueOnError: false
+      interactive: false
+      run: ./infra/scripts/preflight.sh
+    windows:
+      shell: pwsh
+      continueOnError: false
+      interactive: false
+      run: ./infra/scripts/preflight.ps1
+
+  postprovision:
+    posix:
+      shell: sh
+      continueOnError: false
+      interactive: false
+      run: echo "Provisioning complete. Backend and frontend are deployed as Container Apps."
+    windows:
+      shell: pwsh
+      continueOnError: false
+      interactive: false
+      run: Write-Host "Provisioning complete. Backend and frontend are deployed as Container Apps."

@@ -1,0 +1,67 @@
+# =============================================================================
+# EditorConfig — https://editorconfig.org
+# =============================================================================
+# The lowest-common-denominator layer of the toolchain: it is honoured by every
+# major editor, including ones nobody here configured. Formatters (Black,
+# Prettier) still own the files they format; this exists so that a file *no*
+# formatter covers — a Dockerfile, a shell script, a Bicep template — does not
+# acquire a different indent style from whoever last opened it.
+#
+# Line endings are normalised by `.gitattributes` on the way into Git. `end_of_line`
+# here keeps the working copy consistent on the way out.
+# =============================================================================
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 100
+
+# -----------------------------------------------------------------------------
+# Python — matches Black and Ruff (line-length = 100 in pyproject.toml)
+# -----------------------------------------------------------------------------
+[*.{py,pyi}]
+indent_size = 4
+
+# -----------------------------------------------------------------------------
+# Web — matches Prettier's defaults in src/frontend/.prettierrc.json
+# -----------------------------------------------------------------------------
+[*.{js,jsx,ts,tsx,mjs,cjs,css,scss,html,json,jsonc}]
+indent_size = 2
+
+# -----------------------------------------------------------------------------
+# Configuration and markup
+# -----------------------------------------------------------------------------
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{toml,bicep,bicepparam}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+# Two trailing spaces are a hard line break in Markdown. Stripping them silently
+# reflows paragraphs, so Markdown is the one place trailing whitespace stays.
+trim_trailing_whitespace = false
+
+# -----------------------------------------------------------------------------
+# Files whose format is dictated by a tool rather than by us
+# -----------------------------------------------------------------------------
+[{package.json,package-lock.json,uv.lock}]
+indent_size = 2
+insert_final_newline = true
+
+[Makefile]
+indent_style = tab
+
+# CRLF, matching `.gitattributes`. Batch files require it, and some older
+# PowerShell hosts mis-parse an LF script. Disagreeing with `.gitattributes`
+# here would make Git rewrite the endings back on every checkout and show the
+# file as permanently modified.
+[*.{ps1,psm1,psd1,bat,cmd}]
+end_of_line = crlf

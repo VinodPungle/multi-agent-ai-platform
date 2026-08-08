@@ -1,0 +1,57 @@
+[project]
+name = "agent-platform-backend"
+version = "0.1.0"
+description = "FastAPI presentation layer and agent runtime for the Multi-Agent AI Platform"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary" }
+
+dependencies = [
+    # Platform contracts — the backend depends on interfaces, not implementations.
+    "agent-platform-sdk",
+    "agent-platform-shared",
+    # Presentation layer
+    "fastapi>=0.115.6",
+    "uvicorn[standard]>=0.34.0",
+    # Configuration — strongly typed, validated at startup
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    # Composition root
+    "dependency-injector>=4.44.0",
+    # Workflow orchestration. Kept behind `WorkflowEngine` so the graph library
+    # is replaceable — see ADR-0009.
+    "langgraph>=0.2.60",
+    # Prompt asset front matter. Prompts are versioned files with YAML metadata.
+    "pyyaml>=6.0.2",
+    # Outbound HTTP for search providers. Async, and the same client the test
+    # suite already uses, so there is one HTTP stack rather than two.
+    "httpx>=0.28.0",
+    # Azure AI Foundry inference and identity. Confined to
+    # `providers/azure_foundry` and `security/credentials` — see ADR-0011.
+    # `aiohttp` is not a direct choice: it is the async transport azure-core
+    # requires, and the async credential chain fails at import without it.
+    "aiohttp>=3.11.0",
+    # Structured logging
+    "structlog>=24.4.0",
+    # Observability
+    "opentelemetry-api>=1.29.0",
+    "opentelemetry-sdk>=1.29.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.29.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "azure-ai-inference>=1.0.0b9",
+    "azure-identity>=1.19.0",
+]
+
+[project.scripts]
+agent-platform = "agent_platform.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_platform"]
+
+[tool.uv.sources]
+agent-platform-sdk = { workspace = true }
+agent-platform-shared = { workspace = true }

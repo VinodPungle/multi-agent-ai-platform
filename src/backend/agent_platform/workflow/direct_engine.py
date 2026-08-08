@@ -1,0 +1,89 @@
+"""The engine that does nothing.
+
+Executes one agent by calling it. No graph, no state machine, no dependency
+beyond the SDK.
+
+It exists for three reasons, and the first is the important one:
+
+**It proves the abstraction is not LangGraph-shaped.** An interface with exactly
+one implementation is indistinguishable from that implementation's API. A second
+implementation, written against the same protocol and sharing no code with the
+first, is what demonstrates the seam is real — and it is why the LangGraph
+adapter could be replaced without the runtime noticing.
+
+**It is the reference for what an engine must do.** Twenty lines, no framework:
+anyone adding a third engine can read this and know the contract.
+
+**It is a working fallback.** ``PLATFORM_WORKFLOW__ENGINE=direct`` runs the
+platform with no graph library involved, which is a diagnosis tool when
+orchestration itself is suspected.
+
+It will not grow. Multi-agent workflows, branching and checkpointing belong in an
+engine built for them; this one stays trivial so it stays a reference.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+from agent_platform.tools.tool_executor import ToolExecutor
+from agent_platform.workflow.tool_loop import run_tool_loop, stream_tool_loop
+from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_sdk.dto.completion import CompletionChunk
+from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
+from agent_platform_sdk.interfaces.agent import Agent
+
+__all__ = ["DirectWorkflowEngine"]
+
+
+class DirectWorkflowEngine:
+    """Runs a single agent with no orchestration layer.
+
+    Satisfies :class:`~agent_platform_sdk.interfaces.workflow_engine.WorkflowEngine`
+    structurally.
+    """
+
+    def __init__(self, tool_executor: ToolExecutor | None = None) -> None:
+        """Create the engine.
+
+        Args:
+            tool_executor: Tool execution pipeline. ``None`` disables tool
+                calling, which is what the search feature flag being off means.
+        """
+        self._tool_executor = tool_executor
+
+    @property
+    def engine_id(self) -> str:
+        """Identifier reported in telemetry."""
+        return "direct"
+
+    async def execute(
+        self,
+        agent: Agent,
+        request: AgentRequest,
+        context: ExecutionContext,
+    ) -> AgentResult:
+        """Run the agent, including any tool calls it makes.
+
+        Failures propagate unchanged. There is no orchestration here that could
+        fail, so wrapping an agent's error in a ``WorkflowError`` would only
+        hide which layer actually broke.
+        """
+        return await run_tool_loop(agent, request, context, self._tool_executor)
+
+    def stream(
+        self,
+        agent: Agent,
+        request: AgentRequest,
+        context: ExecutionContext,
+    ) -> AsyncIterator[CompletionChunk]:
+        """Stream the agent's answer, running any tools it requests.
+
+        Shares :func:`stream_tool_loop` with the LangGraph engine, for the same
+        reason ``execute`` shares ``run_tool_loop``: the orchestration differs
+        between engines, the loop does not.
+
+        The loop closes the agent's iterator in a ``finally``, so cancelling a
+        stream still releases the provider connection.
+        """
+        return stream_tool_loop(agent, request, context, self._tool_executor)

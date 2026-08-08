@@ -1,0 +1,188 @@
+# =============================================================================
+# Enterprise Multi-Agent AI Platform — uv workspace root
+# =============================================================================
+# This root is a *virtual* project: it ships no code of its own. It exists to
+# pin the toolchain, own the shared quality-gate configuration, and resolve a
+# single lock file across every Python package in the workspace.
+#
+# Workspace members (architecture.md §67):
+#   src/shared   -> agent_platform_shared  (cross-cutting runtime utilities)
+#   src/sdk      -> agent_platform_sdk     (interfaces, DTOs, events, policies)
+#   src/backend  -> agent_platform         (FastAPI application + runtime)
+#
+# Dependency direction is strictly one-way — see docs/adr/0003-workspace-layout.md:
+#   backend -> sdk -> shared
+# =============================================================================
+
+[project]
+name = "multi-agent-ai-platform"
+version = "0.1.0"
+description = "Enterprise Multi-Agent AI Platform — provider-agnostic AI platform runtime"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "agent-platform-backend",
+    "agent-platform-sdk",
+    "agent-platform-shared",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    # Required by starlette.testclient from Starlette 1.x onward; the older
+    # `httpx` backend is deprecated there and emits a warning that `pytest`'s
+    # `filterwarnings = error` turns into a collection failure.
+    "httpx2>=0.1.0",
+    "mypy>=1.14.0",
+    # Managed as a project dependency rather than installed globally, so every
+    # contributor and CI run the same hook framework version.
+    "pre-commit>=4.0.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.4",
+    "types-pyyaml>=6.0.12",
+]
+
+# -----------------------------------------------------------------------------
+# uv workspace
+# -----------------------------------------------------------------------------
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["src/backend", "src/sdk", "src/shared"]
+
+[tool.uv.sources]
+agent-platform-backend = { workspace = true }
+agent-platform-sdk = { workspace = true }
+agent-platform-shared = { workspace = true }
+
+# -----------------------------------------------------------------------------
+# Ruff — linting and import sorting
+# -----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src/backend", "src/sdk", "src/shared", "tests", "scripts"]
+extend-exclude = [".venv", "node_modules", "src/frontend"]
+
+[tool.ruff.lint]
+select = [
+    "A",     # flake8-builtins — no shadowing builtins
+    "ANN",   # flake8-annotations — type hints everywhere (handbook: Python Standards)
+    "ASYNC", # flake8-async — async correctness
+    "B",     # flake8-bugbear
+    "BLE",   # flake8-blind-except — bare `except Exception` must be justified
+    "C4",    # flake8-comprehensions
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "PLW",   # pylint warnings — global state, redefinitions, unused loop vars
+    "PT",    # flake8-pytest-style
+    "PTH",   # flake8-use-pathlib (handbook: pathlib instead of os.path)
+    "RUF",   # ruff-specific
+    "S",     # flake8-bandit — security
+    "SIM",   # flake8-simplify
+    "SLF",   # flake8-self — private access must be justified
+    "T20",   # flake8-print — `print()` is banned (handbook: Logging)
+    "TID",   # flake8-tidy-imports
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+ignore = [
+    "E501", # line length is enforced by Black
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # asserts are the point of a test
+    "ANN201", # test functions need no return annotation
+    "ARG001", # fixtures are injected but not always referenced directly
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Relative imports hide the dependency direction between layers.
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["agent_platform", "agent_platform_sdk", "agent_platform_shared"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# -----------------------------------------------------------------------------
+# Black — formatting
+# -----------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+extend-exclude = "/(\\.venv|node_modules|src/frontend)/"
+
+# -----------------------------------------------------------------------------
+# mypy — static type checking
+# -----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+show_error_codes = true
+pretty = true
+files = ["src/backend", "src/sdk", "src/shared", "tests", "scripts"]
+exclude = ["^\\.venv/", "^node_modules/", "^src/frontend/"]
+# `scripts/` holds standalone tools, not an installed package. Adding it to the
+# search path lets both mypy and the test suite import them by module name
+# instead of loading them from a file path, which would type them as `Any`.
+mypy_path = ["scripts"]
+
+[[tool.mypy.overrides]]
+# dependency-injector ships partial stubs; its dynamic provider attributes are
+# resolved at runtime and cannot be expressed statically.
+module = ["dependency_injector.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# -----------------------------------------------------------------------------
+# pytest
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Mirrors `mypy_path`: the developer scripts are importable by name, so they are
+# tested like any other module rather than exercised only by running them.
+pythonpath = ["scripts"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+markers = [
+    "unit: isolated tests with no I/O and no network access",
+    "integration: tests that wire multiple components together in-process",
+]
+filterwarnings = ["error"]
+
+# -----------------------------------------------------------------------------
+# coverage
+# -----------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["src/backend", "src/sdk", "src/shared", "scripts"]
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.",
+]

@@ -1,0 +1,107 @@
+// =============================================================================
+// Dev Container — https://containers.dev
+// =============================================================================
+// Open the repository in VS Code and choose "Reopen in Container". Everything
+// the documented workflow needs is present at the versions CI uses, so
+// "works on my machine" stops being a class of problem.
+//
+// Using a Dev Container is optional. The native path (uv + Node on the host)
+// remains fully supported and is documented first in the setup guide — this
+// exists for contributors who would rather not install a toolchain, and as an
+// executable definition of what that toolchain is.
+// =============================================================================
+{
+  "name": "Multi-Agent AI Platform",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  "features": {
+    // Node for the frontend. `lts` tracks the same major CI pins (22).
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    // Azure CLI for `az login`, which is how DefaultAzureCredential
+    // authenticates locally from Milestone 05 onward. No API keys.
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "version": "latest"
+    },
+    // The host's Docker socket rather than Docker-in-Docker: `task up` then
+    // starts the Compose stack on the host daemon, so the containers are
+    // reachable at localhost and images are shared with the host cache.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // Named volumes for the package caches. Without them every container rebuild
+  // re-downloads the entire Python and npm dependency trees.
+  "mounts": [
+    "source=agent-platform-uv-cache,target=/home/vscode/.cache/uv,type=volume",
+    "source=agent-platform-npm-cache,target=/home/vscode/.npm,type=volume"
+  ],
+
+  "containerEnv": {
+    // Interpreters are provided by the image and the Node feature; uv must not
+    // download its own on top of them.
+    "UV_PYTHON_DOWNLOADS": "never",
+    "UV_PROJECT_ENVIRONMENT": "/workspaces/multi-agent-ai-platform/.venv"
+  },
+
+  // Runs once after the container is created. `--no-hooks` is deliberate: Git
+  // hooks belong to the host clone, and installing them from inside a container
+  // writes paths that do not resolve outside it.
+  "postCreateCommand": "bash scripts/bootstrap.sh --no-hooks",
+
+  // Runs on every start, including after a rebuild, and is cheap when nothing
+  // changed. Catches the case where a dependency landed while the container was
+  // stopped.
+  "postStartCommand": "uv sync --all-packages --frozen || uv sync --all-packages",
+
+  "forwardPorts": [8000, 5173],
+  "portsAttributes": {
+    "8000": { "label": "Backend API", "onAutoForward": "notify" },
+    "5173": { "label": "Frontend (Vite)", "onAutoForward": "openBrowser" }
+  },
+
+  "customizations": {
+    "vscode": {
+      // Installed automatically inside the container. The list mirrors
+      // `.vscode/extensions.json`; that file recommends, this one installs.
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "charliermarsh.ruff",
+        "ms-python.black-formatter",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "vitest.explorer",
+        "ms-azuretools.vscode-docker",
+        "ms-azuretools.vscode-bicep",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "yzhang.markdown-all-in-one",
+        "bierner.markdown-mermaid",
+        "editorconfig.editorconfig",
+        "task.vscode-task",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        // The one setting that cannot live in `.vscode/settings.json`: the
+        // interpreter path is platform-specific, and inside the container it is
+        // known exactly.
+        "python.defaultInterpreterPath": "/workspaces/multi-agent-ai-platform/.venv/bin/python",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // Non-root, matching the production image's posture. Files created in the
+  // container are then owned by the host user rather than by root.
+  "remoteUser": "vscode"
+}

@@ -1,0 +1,58 @@
+# =============================================================================
+# Line endings and diff behaviour
+# =============================================================================
+# Contributors work on Windows, macOS and Linux; CI and every container run on
+# Linux. Without normalisation, a contributor whose `core.autocrlf` differs
+# commits CRLF, and a shell script with CRLF endings fails in a Linux container
+# with the notoriously unhelpful "bad interpreter: no such file or directory".
+#
+# `text=auto eol=lf` stores every text file with LF in the repository, whatever
+# the checkout looks like locally.
+# =============================================================================
+
+* text=auto eol=lf
+
+# --- Files that must be LF regardless of platform ----------------------------
+# Executed by a Linux shell or interpreter, where CRLF breaks execution.
+*.sh            text eol=lf
+*.bash          text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.bicep         text eol=lf
+*.json          text eol=lf
+*.toml          text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+.env.example    text eol=lf
+
+# --- Files that must be CRLF -------------------------------------------------
+# PowerShell on Windows tolerates LF, but some older hosts do not.
+*.ps1           text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# --- Binary: never normalise, never diff -------------------------------------
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.pdf           binary
+
+# --- Lock files ---------------------------------------------------------------
+# Generated, and enormous. Collapsing them in diffs keeps a dependency-bump
+# pull request reviewable.
+uv.lock             linguist-generated=true -diff
+package-lock.json   linguist-generated=true -diff
+
+# --- Language statistics ------------------------------------------------------
+docs/**         linguist-documentation=true
