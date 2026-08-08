@@ -10,6 +10,9 @@ Operational procedures for diagnosing and resolving production incidents.
 | [Search providers](./search-providers.md) | Choosing a search backend, Tavily keys, cost control |
 | [Deployment](./deployment.md) | Provisioning with azd, secrets, environments, cost, teardown |
 | [CI/CD](./ci-cd.md) | Pipelines, federated credentials, approvals, rollback, scanning |
+| [Operations](./operations.md) | Health, performance baselines, scaling, cost, reliability controls, alerts |
+| [Incident response](./incident-response.md) | Triage by symptom, escalation, suspected compromise |
+| [Backup and recovery](./backup-recovery.md) | What can be lost, what cannot be recovered, rebuild procedure |
 
 ## Not yet populated
 
@@ -18,11 +21,7 @@ land with the systems they cover:
 
 | Runbook | Milestone |
 | --- | --- |
-| Provider outage — failover and degraded operation | 08 |
-| Cost spike investigation | 08 |
-| Latency regression triage | 08 |
 | Secret rotation | 08 |
-| Incident response and escalation | 08 |
 
 Writing a runbook for a system that does not exist produces a document that is
 wrong on the day it is first needed.

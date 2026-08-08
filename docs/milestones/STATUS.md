@@ -13,8 +13,8 @@ acceptance criterion is verified, not merely implemented.
 | 05 | [Azure AI Foundry, FW-Kimi-K3](./milestone-05-azure-ai-foundry-gemma4.md) | ✅ **Complete** | 2026-08-08 |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⚠️ **Complete, not provisioned** | 2026-08-08 |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⚠️ **CI green, CD unrun** | 2026-08-08 |
-| 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Next | — |
-| 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Not started | — |
+| 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⚠️ **Complete, undrilled** | 2026-08-09 |
+| 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Next | — |
 
 ---
 
@@ -1071,6 +1071,125 @@ pytest ....... 626 passed, on the runner as well as locally
 
 ---
 
-## Next: Milestone 08 — Production Hardening and Operational Readiness
+## Milestone 08 — Production Hardening and Operational Readiness ⚠️
+
+Resiliency and observability are built and tested. The operational procedures
+are written and **undrilled** — see "What is written but unproven".
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Health probes succeed | ✅ | `/live`, `/ready`, `/health` measured; `/health` reports every component with detail |
+| Logs and traces visible | ✅ | Structured logs with correlation IDs throughout; App Insights wired via Key Vault reference |
+| Retry, timeout and circuit breaker | ✅ | Circuit breaker implemented and tested — 27 tests |
+| Alert rules documented | ✅ | Six rules as Bicep, severity-graded, compiling |
+| Performance meets targets | ✅ | Baseline **measured**, not asserted — table below |
+| Cost metrics captured | ✅ | Tokens, latency and cost on every call; a spend alert |
+| Backup strategy documented | ✅ | `backup-recovery.md`, including that there is nothing to back up and why that is a stage rather than an achievement |
+| Rollback documented | ✅ | `ci-cd.md` — a revision traffic switch, seconds |
+| Dashboards populated | ❌ | No environment exists to populate one. KQL queries are in the runbooks instead |
+
+### The circuit breaker
+
+The milestone's real engineering. `architecture.md` §23 listed it as future
+work; this is that work.
+
+Retry and a breaker solve opposite problems, and having only the first is worse
+than it looks. Retry assumes failure is transient and retrying is cheap. When a
+provider is genuinely down both assumptions invert: every request pays the full
+timeout three times, and the retries become load on something already
+struggling. A user waits three minutes to learn what the first attempt knew.
+
+Five consecutive counted failures open the breaker for 30 seconds, then one
+trial request decides whether to close it. Per provider, never global — a shared
+breaker would let one provider's outage stop calls to a healthy one.
+
+**Validation failures never count.** They are the caller's fault, and a stream
+of malformed requests must not cut off a healthy provider for everyone else.
+
+Checked *inside* the retry loop rather than once before it, so a breaker that
+opens partway through stops the remaining attempts. Tested: with a threshold of
+2 and 5 permitted attempts, the provider is called twice.
+
+### Performance baseline — measured
+
+Against the mock provider with telemetry off, so this is the platform's own
+overhead. The model dominates a real turn so completely that it hides
+everything else, and model latency is a fact about the model.
+
+| Path | p50 | p95 | p99 |
+| --- | --- | --- | --- |
+| `GET /live` | 0.85 ms | 1.23 ms | 1.69 ms |
+| `GET /health` | 1.15 ms | 1.95 ms | 2.17 ms |
+| `POST /chat/messages` | 4.37 ms | 4.89 ms | 5.39 ms |
+| Streaming, first token | 4.58 ms | 35.1 ms | 35.1 ms |
+
+The streaming p95 is one unwarmed iteration, not a tail.
+
+**Conversation length costs nothing measurable.** Turn 21 came back faster than
+turn 2 — 4.32 ms against 5.02 ms, which is noise. Session memory is bounded and
+in-process, so history does not accumulate cost.
+
+No tuning was needed, and none was done. Inventing an optimisation for a path
+that answers in four milliseconds would have been work performed to have
+performed work.
+
+### Defects found while building
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| `provider_id` passed explicitly alongside `**context.to_log_fields()` — a duplicate keyword argument, so a `TypeError` on the one path that only runs when a provider is already failing | The breaker's own tests | Removed. This is the third instance of this exact mistake in the project |
+| `ScriptedProvider`, my test double, was narrower than `LLMProvider` and failed on `estimate_cost` | Running the gateway tests | Implemented the whole protocol, plus a test asserting the double satisfies it so it cannot drift back |
+| `ErrorCategory.POLICY` does not exist; it is `POLICY_VIOLATION` | mypy | Corrected |
+
+The second is the recurring one, and it now has a guard rather than another
+resolution to be careful.
+
+### Verification performed
+
+```
+ruff / black / mypy --strict ... clean (145 files)
+pytest ....................... 649 passed   (626 before)
+                               27 new: breaker states, transitions, gateway
+                               integration, retry interaction
+az bicep build ............... main + 9 modules, alerts included
+az bicep build-params ........ all 4 environments
+benchmark .................... run, numbers above
+```
+
+### What is written but unproven
+
+Every operational procedure here is theory. Nothing has been drilled, because
+nothing is deployed.
+
+1. **The alert rules have never fired.** They compile. Whether their KQL matches
+   the log shape this platform actually emits is unverified, and a query that
+   silently matches nothing looks exactly like a healthy system.
+2. **The recovery procedure has never been executed.** A recovery procedure
+   nobody has run is a hypothesis. It should be drilled deliberately, before it
+   is needed.
+3. **No load testing.** The baseline is single-threaded latency, not throughput
+   under concurrency. Scaling numbers are starting points, not measurements.
+4. **No dashboard.** There is no environment to populate one from. The runbooks
+   carry KQL queries instead, which is less pretty and more portable.
+
+### Known limitations
+
+1. **Conversation memory is still in-process.** It does not survive a restart
+   and is not shared between replicas, so a scaled-out deployment can lose a
+   user's history mid-conversation. The largest remaining gap, and the one that
+   would change `backup-recovery.md` from "nothing to back up" to a real
+   procedure.
+2. **No provider failover.** The breaker fails fast; it does not fall back.
+   With one provider, an open breaker means certain failure — which is why it
+   can be disabled.
+3. **Cost reports zero** until per-model rates are configured.
+4. **No DR and no multi-region.** Explicitly out of scope. A region outage means
+   an outage.
+
+---
+
+## Next: Milestone 09 — Enterprise Expansion
 
 Not started. Awaiting approval before any work begins.

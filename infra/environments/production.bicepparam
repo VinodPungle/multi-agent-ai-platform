@@ -45,3 +45,11 @@ param aiFoundryDeploymentSku = 'DataZoneStandard'
 // from optimism.
 param aiFoundryDeploymentCapacity = 50
 param platformModelId = 'fw-kimi-k3'
+
+// Alerting. `alertNotificationEmail` is left empty here deliberately: an
+// address in a committed file is both a routing decision nobody reviewed and a
+// small piece of personal data. Set it at deploy time.
+param enableAlerts = true
+param alertNotificationEmail = ''
+param latencyThresholdMs = 30000
+param hourlyTokenThreshold = 1000000

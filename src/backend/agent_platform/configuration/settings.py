@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource, PydanticBaseSettingsSource
 
+from agent_platform_sdk.policies.circuit_breaker import CircuitBreakerPolicy
 from agent_platform_sdk.policies.retry import RetryPolicy
 from agent_platform_sdk.policies.timeout import TimeoutPolicy
 
@@ -236,6 +237,14 @@ class LLMGatewaySettings(BaseModel):
     timeout: TimeoutPolicy = Field(
         default_factory=TimeoutPolicy,
         description="Per-hop wall-clock budgets.",
+    )
+    circuit_breaker: CircuitBreakerPolicy = Field(
+        default_factory=CircuitBreakerPolicy,
+        description=(
+            "When to stop calling a provider that keeps failing. Defaults to on: "
+            "a deployment that never configured one still gets protection from a "
+            "dead upstream, which is when nobody is reading configuration docs."
+        ),
     )
 
 

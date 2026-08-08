@@ -39,3 +39,10 @@ param aiFoundryModelVersion = '1'
 param aiFoundryDeploymentSku = 'DataZoneStandard'
 param aiFoundryDeploymentCapacity = 25
 param platformModelId = 'fw-kimi-k3'
+
+// Alerts are created but notify nobody unless an address is supplied at deploy
+// time. Staging exists to find out whether a rule fires, not to page anyone.
+param enableAlerts = true
+param alertNotificationEmail = ''
+param latencyThresholdMs = 45000
+param hourlyTokenThreshold = 250000

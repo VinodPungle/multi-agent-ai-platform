@@ -34,6 +34,7 @@ from agent_platform.exceptions.base import (
     ProviderError,
     ValidationError,
 )
+from agent_platform.gateway.circuit_breaker import CircuitBreaker
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
@@ -45,6 +46,7 @@ from agent_platform_sdk.dto.completion import (
 )
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.llm_provider_resolver import LLMProviderResolver
+from agent_platform_sdk.policies.circuit_breaker import CircuitBreakerPolicy
 from agent_platform_sdk.policies.retry import RetryPolicy
 from agent_platform_sdk.policies.timeout import TimeoutPolicy
 from agent_platform_shared.clock import Clock
@@ -74,6 +76,7 @@ class DefaultLLMGateway:
         clock: Clock,
         retry_policy: RetryPolicy,
         timeout_policy: TimeoutPolicy,
+        circuit_breaker_policy: CircuitBreakerPolicy | None = None,
     ) -> None:
         """Create the gateway.
 
@@ -84,11 +87,22 @@ class DefaultLLMGateway:
             retry_policy: Attempts and backoff for non-streaming calls.
             timeout_policy: Per-call budgets. Required rather than defaulted, so
                 that a deployment cannot silently inherit a timeout nobody chose.
+            circuit_breaker_policy: When to stop calling a failing provider.
+                Defaults to the policy's own defaults rather than to "off": a
+                deployment that never configured one still gets protection from
+                a dead upstream.
         """
         self._resolver = resolver
         self._clock = clock
         self._retry_policy = retry_policy
         self._timeout_policy = timeout_policy
+        self._circuit_breaker_policy = circuit_breaker_policy or CircuitBreakerPolicy()
+
+        # One breaker per provider, created on first use. A shared breaker would
+        # let one provider's outage stop calls to a healthy one, which is the
+        # opposite of the point.
+        self._breakers: dict[str, CircuitBreaker] = {}
+        self._breakers_lock = asyncio.Lock()
 
     # -- Inference ---------------------------------------------------------
 
@@ -296,15 +310,28 @@ class DefaultLLMGateway:
         request: CompletionRequest,
         context: ExecutionContext,
     ) -> CompletionResponse:
-        """Call ``provider.generate`` under the retry and timeout policies."""
+        """Call ``provider.generate`` under retry, timeout and breaker policy."""
+        breaker = await self._breaker_for(provider.provider_id)
         attempt = 0
+
         while True:
             attempt += 1
+
+            # Checked inside the loop, not once before it. A breaker that opens
+            # partway through a retry sequence should stop the remaining
+            # attempts — continuing to hammer an upstream that has just been
+            # declared unhealthy is exactly what this exists to prevent.
+            if not await breaker.allows_request():
+                raise self._circuit_open_error(provider.provider_id, context)
+
             try:
                 async with asyncio.timeout(self._timeout_policy.model_call_seconds):
-                    return await provider.generate(request, context)
+                    response = await provider.generate(request, context)
             except Exception as error:
                 failure, retryable = self._classify(error, provider.provider_id)
+
+                if self._circuit_breaker_policy.counts_towards_opening(failure.category):
+                    await breaker.record_failure()
 
                 if not retryable or attempt >= self._retry_policy.max_attempts:
                     self._log_failure(failure, attempt=attempt, streaming=False, context=context)
@@ -321,6 +348,64 @@ class DefaultLLMGateway:
                     **context.to_log_fields(),
                 )
                 await asyncio.sleep(delay_seconds)
+            else:
+                await breaker.record_success()
+                return response
+
+    async def _breaker_for(self, provider_id: str) -> CircuitBreaker:
+        """Return this provider's breaker, creating it on first use.
+
+        Double-checked under a lock: two concurrent first calls to the same
+        provider would otherwise each create a breaker, and one of them would be
+        discarded along with the failures it had already counted.
+        """
+        breaker = self._breakers.get(provider_id)
+        if breaker is not None:
+            return breaker
+
+        async with self._breakers_lock:
+            existing = self._breakers.get(provider_id)
+            if existing is not None:
+                return existing
+
+            created = CircuitBreaker(provider_id, self._circuit_breaker_policy, self._clock)
+            self._breakers[provider_id] = created
+            return created
+
+    def _circuit_open_error(self, provider_id: str, context: ExecutionContext) -> ProviderError:
+        """Build the failure returned while a breaker is open.
+
+        Not retryable, and deliberately so: retrying is precisely what the
+        breaker exists to stop. The message says the provider is unavailable
+        rather than that a request failed, because those call for different
+        responses from whoever reads it.
+        """
+        _logger.warning(
+            "llm.circuit_open",
+            # `provider_id` is not passed explicitly: the execution context
+            # already carries it, and duplicating it is a TypeError on the one
+            # path that only runs when a provider is already failing.
+            reset_timeout_seconds=self._circuit_breaker_policy.reset_timeout_seconds,
+            detail="Provider is failing repeatedly; calls are being skipped.",
+            **context.to_log_fields(),
+        )
+        message = (
+            f"Provider {provider_id!r} is temporarily unavailable after repeated "
+            f"failures. Calls resume automatically once it recovers."
+        )
+        return ProviderError(message, provider_id=provider_id)
+
+    async def circuit_states(self) -> dict[str, str]:
+        """Report every known breaker's state, for health and diagnostics.
+
+        Empty until a provider has been called at least once — a breaker is
+        created on first use, and reporting CLOSED for a provider nothing has
+        exercised would claim knowledge the gateway does not have.
+        """
+        return {
+            provider_id: (await breaker.snapshot())[0].value
+            for provider_id, breaker in self._breakers.items()
+        }
 
     def _classify(self, error: Exception, provider_id: str) -> tuple[PlatformError, bool]:
         """Map a raised exception onto a platform error and a retry decision.

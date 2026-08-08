@@ -339,6 +339,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         clock=clock,
         retry_policy=settings.provided.llm_gateway.retry,
         timeout_policy=settings.provided.llm_gateway.timeout,
+        circuit_breaker_policy=settings.provided.llm_gateway.circuit_breaker,
     )
 
     # -- Runtime -----------------------------------------------------------

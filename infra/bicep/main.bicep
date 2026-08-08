@@ -101,6 +101,18 @@ param frontendMinReplicas int = 0
 @minValue(1)
 param frontendMaxReplicas int = 3
 
+@description('Create alert rules. Off where nobody is on call - a channel that pages during development gets muted, and it is the same channel production uses.')
+param enableAlerts bool = false
+
+@description('Email notified by alerts. Empty creates the rules with no action, which is valid while a channel is being decided.')
+param alertNotificationEmail string = ''
+
+@description('P95 chat latency, in milliseconds, that counts as degraded.')
+param latencyThresholdMs int = 30000
+
+@description('Tokens per hour above which spend is unexpected. Set from observed load, not from optimism.')
+param hourlyTokenThreshold int = 500000
+
 @description('Log level for the backend.')
 @allowed(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
 param logLevel string = 'INFO'
@@ -402,6 +414,27 @@ module backendApp 'modules/container-app.bicep' = {
 }
 
 // -----------------------------------------------------------------------------
+// Alerting
+// -----------------------------------------------------------------------------
+// Declared after the apps because the rules reference them. Off by default:
+// see `enableAlerts`.
+
+module alerts 'modules/alerts.bicep' = if (enableAlerts) {
+  name: 'alerts'
+  scope: resourceGroup
+  params: {
+    tags: tags
+    backendAppId: backendApp.outputs.id
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsResourceId
+    applicationInsightsId: monitoring.outputs.applicationInsightsId
+    enabled: enableAlerts
+    notificationEmail: alertNotificationEmail
+    latencyThresholdMs: latencyThresholdMs
+    hourlyTokenThreshold: hourlyTokenThreshold
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Outputs
 // -----------------------------------------------------------------------------
 // Consumed by azd and by the deployment workflow. No secret is ever output —
@@ -443,3 +476,9 @@ output AZURE_AI_FOUNDRY_ENDPOINT string = resolvedFoundryEndpoint
 
 @description('Model deployment the backend invokes.')
 output AZURE_AI_FOUNDRY_DEPLOYMENT string = aiFoundryDeploymentName
+
+@description('Whether alert rules were created for this environment.')
+output ALERTS_ENABLED bool = enableAlerts
+
+@description('Whether those alerts will actually notify anyone. False means the rules exist and fire silently.')
+output ALERTS_NOTIFY bool = enableAlerts ? alerts!.outputs.notificationConfigured : false
