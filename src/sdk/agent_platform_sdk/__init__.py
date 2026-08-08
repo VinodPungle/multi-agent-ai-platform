@@ -11,6 +11,8 @@ without breaking callers.
 from agent_platform_sdk.contracts import ComponentHealth, ExecutionContext, HealthReport
 from agent_platform_sdk.dto import (
     AgentDescriptor,
+    AgentRequest,
+    AgentResult,
     CompletionChunk,
     CompletionRequest,
     CompletionResponse,
@@ -28,8 +30,10 @@ from agent_platform_sdk.dto.prompt import PromptAsset, PromptVariable
 from agent_platform_sdk.dto.search import SearchQuery, SearchResult, SearchResults
 from agent_platform_sdk.events import RuntimeEvent, RuntimeEventName
 from agent_platform_sdk.interfaces import (
+    Agent,
     EmbeddingProvider,
     EvaluationProvider,
+    EventPublisher,
     LLMGateway,
     LLMProvider,
     LLMProviderResolver,
@@ -41,6 +45,7 @@ from agent_platform_sdk.interfaces import (
     ToolProvider,
     VectorRecord,
     VectorStoreProvider,
+    WorkflowEngine,
 )
 from agent_platform_sdk.policies import BudgetPolicy, RetryPolicy, TimeoutPolicy
 from agent_platform_sdk.types import (
@@ -55,7 +60,10 @@ from agent_platform_sdk.types import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "Agent",
     "AgentDescriptor",
+    "AgentRequest",
+    "AgentResult",
     "BudgetPolicy",
     "Capability",
     "CompletionChunk",
@@ -66,6 +74,7 @@ __all__ = [
     "ErrorCategory",
     "EvaluationProvider",
     "EvaluationRecord",
+    "EventPublisher",
     "ExecutionContext",
     "ExecutionState",
     "HealthReport",
@@ -100,5 +109,6 @@ __all__ = [
     "ToolResult",
     "VectorRecord",
     "VectorStoreProvider",
+    "WorkflowEngine",
     "__version__",
 ]

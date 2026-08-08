@@ -8,8 +8,10 @@ All contracts are :class:`typing.Protocol` declarations. See
 ``docs/adr/0004-provider-abstraction-via-protocols.md`` for why.
 """
 
+from agent_platform_sdk.interfaces.agent import Agent
 from agent_platform_sdk.interfaces.embedding_provider import EmbeddingProvider
 from agent_platform_sdk.interfaces.evaluation_provider import EvaluationProvider
+from agent_platform_sdk.interfaces.event_publisher import EventPublisher
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.llm_provider_resolver import LLMProviderResolver
@@ -23,10 +25,13 @@ from agent_platform_sdk.interfaces.vector_store_provider import (
     VectorRecord,
     VectorStoreProvider,
 )
+from agent_platform_sdk.interfaces.workflow_engine import WorkflowEngine
 
 __all__ = [
+    "Agent",
     "EmbeddingProvider",
     "EvaluationProvider",
+    "EventPublisher",
     "LLMGateway",
     "LLMProvider",
     "LLMProviderResolver",
@@ -38,4 +43,5 @@ __all__ = [
     "ToolProvider",
     "VectorRecord",
     "VectorStoreProvider",
+    "WorkflowEngine",
 ]

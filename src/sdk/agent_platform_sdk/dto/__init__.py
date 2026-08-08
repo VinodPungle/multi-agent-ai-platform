@@ -12,12 +12,15 @@ from agent_platform_sdk.dto.completion import (
     CompletionResponse,
     TokenUsage,
 )
+from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
 from agent_platform_sdk.dto.message import Message, ToolCall
 from agent_platform_sdk.dto.model import ModelDescriptor, ModelPricing
 from agent_platform_sdk.dto.tool import ToolDescriptor, ToolInvocation, ToolResult
 
 __all__ = [
     "AgentDescriptor",
+    "AgentRequest",
+    "AgentResult",
     "CompletionChunk",
     "CompletionRequest",
     "CompletionResponse",
