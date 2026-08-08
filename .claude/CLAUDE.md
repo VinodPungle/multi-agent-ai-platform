@@ -223,6 +223,10 @@ Provider SDKs belong only inside Infrastructure.
 
 ---
 
+Never expose Azure SDK classes outside provider implementations.
+
+---
+
 Always use interfaces.
 
 Examples:
@@ -821,6 +825,26 @@ Example responsibilities:
 - Retry support
 
 Business logic must never depend on provider SDKs.
+
+---
+
+# Provider Neutrality
+
+The initial implementation uses Azure AI Foundry.
+
+However, the architecture must never assume Azure AI Foundry is the only provider.
+
+Business logic communicates exclusively through provider-neutral interfaces.
+
+Whenever practical, design request and response contracts compatible with OpenAI-style Chat APIs.
+
+Future providers should be implementable without changing:
+
+- Agent Runtime
+- Workflows
+- Memory
+- Tools
+- Prompt Engine
 
 ---
 

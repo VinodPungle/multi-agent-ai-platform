@@ -116,6 +116,68 @@ environment and through a file on disk, as production does.
 
 ---
 
+## Architectural refinement — Provider-Neutral LLM Contract and LLM Gateway
+
+Between Milestone 01 and Milestone 01.5. No milestone scope was changed and no
+runtime capability was added.
+
+### What prompted it
+
+`architecture.md` §30 documents a provider-neutral contract and an LLM Gateway
+that had no counterpart in code. The gap was cheap to close now and expensive
+later: Azure AI Foundry arrives in Milestone 05, and a first provider written
+before the gateway exists would define the shape of the call path.
+
+### Audit result
+
+Every location in the repository that could couple to Azure AI Foundry was
+reviewed against `CLAUDE.md`, `project-spec.md`, `architecture.md` and the
+engineering handbook.
+
+| Location | Finding |
+| --- | --- |
+| `src/backend`, `src/sdk`, `src/shared` | No Azure SDK is imported anywhere. No Azure request or response type exists. |
+| `agent_platform.providers` | Empty. Documented as the only package permitted a vendor import. |
+| `TelemetrySettings.azure_monitor_connection_string` | A vendor-named configuration value, not a coupling: it is exported through an OTLP collector and no Azure SDK reads it (ADR-0005). Left as is. |
+| Doc comments naming Azure | Illustrative only, in docstrings explaining what an abstraction exists for. |
+
+The refactor was therefore additive. Nothing had to be untangled.
+
+### What changed
+
+- `LLMGateway` and `LLMProviderResolver` contracts in the SDK.
+- `DefaultLLMGateway` and `ConfiguredProviderResolver` in the backend, wired in
+  the composition root.
+- The common request and response models completed to match `architecture.md`
+  §30 — `system_prompt`, `top_p`, `response_format`, `metadata`,
+  `provider_metadata`, `model_metadata`.
+- Gateway policy externalised as `PLATFORM_LLM_GATEWAY__*`.
+- [ADR-0006](../adr/0006-llm-gateway-and-provider-neutral-contract.md).
+
+### Verification
+
+```
+ruff .............. All checks passed
+black ............. 93 files unchanged
+mypy --strict ..... no issues in 93 source files
+pytest ............ 197 passed (150 before, 187 before the last two test files)
+```
+
+The 150 tests that existed before this work all still pass unmodified: no
+behaviour was changed, only added.
+
+### Known limitations
+
+1. **The gateway has no caller yet.** The Agent Runtime arrives in Milestone 03.
+   Until then the gateway is exercised by tests, not by traffic.
+2. **No provider is registered.** `llm_providers` is an empty tuple, so every
+   resolution fails with `NotFoundError` by design. Azure AI Foundry registers
+   in Milestone 05.
+3. **`response_format` is carried but not honoured.** Providers implement it
+   from Milestone 05.
+
+---
+
 ## Next: Milestone 01.5 — Developer Experience
 
 Not started. Scope per

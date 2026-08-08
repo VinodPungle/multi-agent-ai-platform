@@ -3,6 +3,16 @@
 These are the types every :class:`~agent_platform_sdk.interfaces.llm_provider.LLMProvider`
 accepts and returns. Because they are provider-neutral, swapping Azure AI Foundry
 for Anthropic changes no caller.
+
+Together they are the *common request model* and *common response model* of
+``architecture.md`` §30. Field names deliberately track the OpenAI-style Chat API
+vocabulary — ``temperature``, ``top_p``, ``stop``, ``response_format`` — because
+that is the dialect every OpenAI-compatible endpoint already speaks. An adapter
+for such an endpoint then becomes a rename, not a translation layer.
+
+No field here may hold a vendor object. Provider-side detail travels as strings
+in :attr:`CompletionResponse.provider_metadata`, which is what keeps an SDK type
+from becoming a place a vendor payload can hide.
 """
 
 from __future__ import annotations
@@ -12,6 +22,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_platform_sdk.dto.message import Message, ToolCall
+from agent_platform_sdk.types.enums import ResponseFormat
 
 __all__ = [
     "CompletionChunk",
@@ -47,11 +58,31 @@ class CompletionRequest(BaseModel):
 
     model_id: str = Field(description="Registry identifier of the model to invoke.")
     messages: tuple[Message, ...] = Field(description="Conversation, oldest message first.")
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Instruction governing the whole exchange, carried separately from "
+            "`messages` because providers disagree about where it belongs: some take a "
+            "dedicated parameter, others expect a leading system message. Keeping it "
+            "distinct lets each adapter place it correctly instead of forcing one "
+            "convention on all of them."
+        ),
+    )
     temperature: float | None = Field(
         default=None,
         ge=0.0,
         le=2.0,
         description="Sampling temperature. None defers to the model's registered default.",
+    )
+    top_p: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Nucleus sampling threshold. None defers to the provider default. Setting "
+            "this together with `temperature` is accepted but rarely intended — most "
+            "providers document that one or the other should be tuned, not both."
+        ),
     )
     max_output_tokens: int | None = Field(
         default=None,
@@ -65,6 +96,22 @@ class CompletionRequest(BaseModel):
     tool_ids: tuple[str, ...] = Field(
         default=(),
         description="Tools the model may call, resolved through the tool registry.",
+    )
+    response_format: ResponseFormat | None = Field(
+        default=None,
+        description=(
+            "Requested output shape. None leaves the provider default in place. A "
+            "provider must reject a format the resolved model does not declare a "
+            "capability for, rather than silently returning prose."
+        ),
+    )
+    metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Caller-supplied labels echoed into telemetry — experiment arm, prompt "
+            "variant, evaluation run. Strings only, and never user content or "
+            "credentials: these values reach logs and traces."
+        ),
     )
 
 
@@ -92,6 +139,22 @@ class CompletionResponse(BaseModel):
     finish_reason: str | None = Field(
         default=None,
         description="Why generation stopped, normalised by the provider adapter.",
+    )
+    provider_metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Provider-side facts worth keeping for diagnosis — the vendor's own request "
+            "id, the region that served the call, a rate-limit remainder. Flattened to "
+            "strings at the provider boundary so that no vendor object escapes it."
+        ),
+    )
+    model_metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "What the model actually was, as opposed to what was asked for: resolved "
+            "version, deployment name, revision. The distinction matters when a "
+            "provider silently upgrades a deployment underneath a stable model id."
+        ),
     )
 
 

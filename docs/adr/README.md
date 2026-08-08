@@ -15,6 +15,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0003](./0003-workspace-layout-and-package-boundaries.md) | uv workspace with three Python packages | Accepted | 01 |
 | [0004](./0004-provider-abstraction-via-protocols.md) | Declare provider contracts as `typing.Protocol` | Accepted | 01 |
 | [0005](./0005-opentelemetry-first-observability.md) | OpenTelemetry-first observability | Accepted | 01 |
+| [0006](./0006-llm-gateway-and-provider-neutral-contract.md) | Route every model call through an LLM Gateway | Accepted | 01 → 01.5 |
 
 ## Writing one
 

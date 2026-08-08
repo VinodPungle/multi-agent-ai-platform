@@ -30,10 +30,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource, PydanticBaseSettingsSource
 
+from agent_platform_sdk.policies.retry import RetryPolicy
+from agent_platform_sdk.policies.timeout import TimeoutPolicy
+
 __all__ = [
     "AppSettings",
     "Environment",
     "FeatureFlagSettings",
+    "LLMGatewaySettings",
     "LoggingSettings",
     "PlatformSettings",
     "ServerSettings",
@@ -189,6 +193,39 @@ class TelemetrySettings(BaseModel):
         return value
 
 
+class LLMGatewaySettings(BaseModel):
+    """Policy the LLM Gateway applies to every model call.
+
+    Externalised here rather than defaulted in the gateway so that a deployment
+    can tighten a timeout or widen a retry budget without a code change
+    (``CLAUDE.md``, "Never hardcode"). The policy models themselves live in the
+    SDK, so a future service that talks to providers applies the same shapes.
+
+    Nothing here names a provider or a vendor: these are platform policies, and
+    they read identically for Azure AI Foundry and for any OpenAI-compatible
+    endpoint added later.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    default_provider_id: str | None = Field(
+        default=None,
+        description=(
+            "Provider used when a request does not pin one. Optional while a single "
+            "provider is registered; required once there is more than one, because "
+            "guessing between them is a routing decision the platform must not make."
+        ),
+    )
+    retry: RetryPolicy = Field(
+        default_factory=RetryPolicy,
+        description="Attempts and backoff for non-streaming model calls.",
+    )
+    timeout: TimeoutPolicy = Field(
+        default_factory=TimeoutPolicy,
+        description="Per-hop wall-clock budgets.",
+    )
+
+
 class FeatureFlagSettings(BaseModel):
     """Runtime feature toggles.
 
@@ -260,6 +297,7 @@ class PlatformSettings(BaseSettings):
     server: ServerSettings = Field(default_factory=ServerSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)
 
     @classmethod

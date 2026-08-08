@@ -16,6 +16,8 @@ from dependency_injector import containers, providers
 
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
+from agent_platform.gateway.llm_gateway import DefaultLLMGateway
+from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
 from agent_platform_shared.clock import SystemClock
 
 __all__ = ["ApplicationContainer"]
@@ -51,4 +53,30 @@ class ApplicationContainer(containers.DeclarativeContainer):
         HealthService,
         settings=settings,
         clock=clock,
+    )
+
+    #: Registered LLM providers. Empty until Milestone 05 registers Azure AI
+    #: Foundry. Declared now so that registering one is an addition here and
+    #: nowhere else — no consumer of the gateway changes when it becomes
+    #: non-empty.
+    llm_providers = providers.Object(())
+
+    #: Answers which provider serves a model. Replaced by a registry-backed
+    #: implementation in Milestone 03; the gateway is unaffected because it
+    #: depends on the resolver protocol.
+    llm_provider_resolver = providers.Singleton(
+        ConfiguredProviderResolver,
+        providers=llm_providers,
+        default_provider_id=settings.provided.llm_gateway.default_provider_id,
+    )
+
+    #: The platform's only path to model inference. Business logic depends on
+    #: the `LLMGateway` protocol; this is the single place the implementation is
+    #: named.
+    llm_gateway = providers.Singleton(
+        DefaultLLMGateway,
+        resolver=llm_provider_resolver,
+        clock=clock,
+        retry_policy=settings.provided.llm_gateway.retry,
+        timeout_policy=settings.provided.llm_gateway.timeout,
     )

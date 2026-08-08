@@ -17,6 +17,7 @@ restructure the tree.
 | `exceptions/` | Platform exception hierarchy | Implemented |
 | `application/` | Use cases and orchestration services | Skeleton |
 | `domain/` | Domain models and business rules. Depends on nothing. | Skeleton |
+| `gateway/` | LLM Gateway — the single, provider-independent path to model inference | Implemented |
 | `runtime/` | Agent Runtime — request lifecycle, execution, policy enforcement | Skeleton |
 | `workflow/` | LangGraph workflow construction and execution | Skeleton |
 | `agents/` | Specialised agents (chat, research, coding, …) | Skeleton |
@@ -52,6 +53,20 @@ api  ->  application  ->  domain
 `domain` and `application` must never import `providers`, `storage`, `security`, or
 any vendor SDK. Implementations are supplied through the container in
 `dependencies/container.py`.
+
+Model calls follow one path and only one:
+
+```
+runtime / agents  ->  LLMGateway (protocol)  ->  DefaultLLMGateway  ->  LLMProvider (protocol)
+                                                                              ^
+                                                                              |
+                                                          providers/  (the only vendor SDK import)
+```
+
+`gateway/` is provider-independent: it imports the SDK contracts and never
+`providers/`. A provider arrives injected, resolved through
+`LLMProviderResolver`. See
+[ADR-0006](../../docs/adr/0006-llm-gateway-and-provider-neutral-contract.md).
 
 ## Running locally
 

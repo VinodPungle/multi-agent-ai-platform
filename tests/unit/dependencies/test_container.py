@@ -12,6 +12,8 @@ import pytest
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.dependencies.container import ApplicationContainer
+from agent_platform.gateway.llm_gateway import DefaultLLMGateway
+from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_shared.clock import Clock, SystemClock
 
 pytestmark = pytest.mark.unit
@@ -44,6 +46,33 @@ class TestResolution:
 
         assert isinstance(service, HealthService)
         assert service._settings is test_settings  # noqa: SLF001 - asserting wiring
+
+
+class TestLLMGatewayWiring:
+    """The gateway is the only path to a model, so its wiring is load-bearing."""
+
+    def test_the_gateway_resolves_and_satisfies_the_contract(
+        self, container: ApplicationContainer
+    ) -> None:
+        gateway = container.llm_gateway()
+
+        assert isinstance(gateway, DefaultLLMGateway)
+        # Consumers depend on the protocol; the container is the only place the
+        # implementation is named.
+        assert isinstance(gateway, LLMGateway)
+
+    def test_no_provider_is_registered_yet(self, container: ApplicationContainer) -> None:
+        """Milestone 05 registers the first one. Until then the tuple is empty."""
+        assert container.llm_providers() == ()
+
+    def test_the_gateway_takes_its_policies_from_configuration(
+        self, container: ApplicationContainer, test_settings: PlatformSettings
+    ) -> None:
+        """A hardcoded timeout would be a deployment that cannot be tuned."""
+        gateway = container.llm_gateway()
+
+        assert gateway._timeout_policy is test_settings.llm_gateway.timeout  # noqa: SLF001
+        assert gateway._retry_policy is test_settings.llm_gateway.retry  # noqa: SLF001
 
 
 class TestLifetimes:

@@ -6,6 +6,7 @@ from agent_platform_sdk.types.enums import (
     ExecutionState,
     HealthStatus,
     MessageRole,
+    ResponseFormat,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "ExecutionState",
     "HealthStatus",
     "MessageRole",
+    "ResponseFormat",
 ]

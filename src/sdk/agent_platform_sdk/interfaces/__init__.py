@@ -10,7 +10,9 @@ All contracts are :class:`typing.Protocol` declarations. See
 
 from agent_platform_sdk.interfaces.embedding_provider import EmbeddingProvider
 from agent_platform_sdk.interfaces.evaluation_provider import EvaluationProvider
+from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
+from agent_platform_sdk.interfaces.llm_provider_resolver import LLMProviderResolver
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_sdk.interfaces.prompt_provider import PromptProvider
 from agent_platform_sdk.interfaces.provider import Provider
@@ -25,7 +27,9 @@ from agent_platform_sdk.interfaces.vector_store_provider import (
 __all__ = [
     "EmbeddingProvider",
     "EvaluationProvider",
+    "LLMGateway",
     "LLMProvider",
+    "LLMProviderResolver",
     "MemoryProvider",
     "PromptProvider",
     "Provider",

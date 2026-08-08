@@ -672,6 +672,47 @@ Do not expose provider SDK types outside the provider package.
 
 ---
 
+# LLM Integration Standards
+
+All LLM integrations must follow the provider-neutral contract.
+
+Rules:
+
+* Business logic must never depend on provider SDKs.
+* Provider SDKs remain inside provider packages.
+* Request normalization occurs before provider invocation.
+* Response normalization occurs before returning to the Agent Runtime.
+* Provider implementations should resemble OpenAI-style Chat APIs whenever practical.
+
+Every model call goes through the LLM Gateway.
+
+* Business logic depends on `LLMGateway`, never on `LLMProvider`. Holding a
+  provider directly puts retry, timeout and cost handling back into
+  orchestration, one copy per call site.
+* The gateway is provider independent. `agent_platform.gateway` importing
+  `agent_platform.providers` is as much a violation as importing a vendor SDK.
+* A provider does translation, transport, authentication, tokenization, and
+  mapping vendor failures onto `PlatformError`. Nothing else.
+* A provider never chooses a model and never selects itself. Both are resolved
+  before the call reaches it.
+* Streaming is never retried. A partially delivered answer cannot be replayed.
+
+See [ADR-0006](./adr/0006-llm-gateway-and-provider-neutral-contract.md).
+
+Never expose:
+
+Azure SDK models
+
+Azure AI Foundry models
+
+HTTP response objects
+
+SDK exceptions
+
+outside provider implementations.
+
+---
+
 # Configuration
 
 Configuration should be loaded once at startup.
@@ -1430,11 +1471,21 @@ When implementing a new LLM provider:
 
 ✓ Add Cost Estimation
 
+✓ Map vendor failures onto the platform exception hierarchy
+
+✓ Confirm no vendor type escapes the provider package
+
+✓ Confirm no retry, timeout or telemetry logic was added — that belongs to the Gateway
+
 ✓ Add Tests
 
 ✓ Update Documentation
 
 Business logic must remain unchanged.
+
+A new provider adds files under `agent_platform/providers/` and one registration
+line in the composition root. If it required a change anywhere else, the
+abstraction has been breached — find out where before merging.
 
 ---
 
@@ -1568,6 +1619,10 @@ Every review should verify:
 ✓ Performance considered
 
 ✓ Cost implications considered
+
+✓ Provider neutrality verified
+
+✓ No Azure SDK types appear outside provider packages
 
 Reject changes that introduce tight coupling without clear justification.
 

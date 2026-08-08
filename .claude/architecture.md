@@ -1031,7 +1031,191 @@ Business logic must never reference provider SDKs directly.
 
 ---
 
-# 30. Model Registry
+# 30. Provider-Neutral LLM Contract
+
+## Objective
+
+The platform shall interact with all Large Language Models through a provider-neutral contract.
+
+Although the initial implementation targets Azure AI Foundry, business logic, agents, workflows, tools, and memory services shall not depend on Azure-specific request or response models.
+
+The common contract should be compatible with OpenAI-style Chat APIs to maximize interoperability.
+
+## Design Principles
+
+- Business logic must never call provider SDKs directly.
+- Provider SDKs remain encapsulated inside provider implementations.
+- All requests are normalized before reaching a provider.
+- All responses are normalized before returning to the Agent Runtime.
+- Streaming uses a provider-independent event model.
+
+The Agent Runtime communicates only with the LLM Provider interface.
+
+## Invocation Path
+
+```
+Agent Runtime
+      │
+      ▼
+LLM Gateway
+      │
+      ▼
+LLM Provider Interface
+      │
+      ├── Azure AI Foundry Provider
+      ├── Azure OpenAI Provider (Future)
+      ├── OpenAI-Compatible Provider (Future)
+```
+
+## LLM Gateway Responsibilities
+
+The LLM Gateway is responsible for:
+
+- Request normalization
+- Response normalization
+- Model selection
+- Streaming coordination
+- Telemetry
+- Retry policies
+- Timeout policies
+- Cost estimation
+- Provider selection
+
+The provider is responsible only for communication with the external inference service.
+
+## Common Request Model
+
+Define a conceptual request model containing fields such as:
+
+- messages
+- system prompt
+- model
+- temperature
+- max output tokens
+- top_p
+- stop sequences
+- tools (future)
+- response format (future)
+- metadata
+
+Do not define Azure-specific request objects outside provider implementations.
+
+## Common Response Model
+
+Conceptually define a response containing:
+
+- content
+- finish reason
+- token usage
+- latency
+- provider metadata
+- model metadata
+
+Streaming responses should use the same abstraction.
+
+## Class Diagram
+
+Contracts are declared as protocols; implementations satisfy them structurally
+(see ADR-0004). The runtime depends on `LLMGateway` and never on `LLMProvider`.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class LLMGateway {
+        <<protocol>>
+        +generate(request, context) CompletionResponse
+        +stream(request, context) AsyncIterator~CompletionChunk~
+        +count_tokens(request, context) TokenUsage
+        +estimate_cost(model_id, usage, context) Decimal
+    }
+
+    class LLMProviderResolver {
+        <<protocol>>
+        +resolve(model_id, context) LLMProvider
+    }
+
+    class LLMProvider {
+        <<protocol>>
+        +provider_id
+        +generate(request, context) CompletionResponse
+        +stream(request, context) AsyncIterator~CompletionChunk~
+        +count_tokens(request) TokenUsage
+        +estimate_cost(model_id, usage) Decimal
+        +list_models() ModelDescriptor[]
+    }
+
+    class DefaultLLMGateway {
+        -resolver
+        -retry_policy
+        -timeout_policy
+        -clock
+    }
+
+    class ConfiguredProviderResolver {
+        -providers
+        -default_provider_id
+    }
+
+    class AzureAIFoundryProvider {
+        Milestone 05
+    }
+
+    class OpenAICompatibleProvider {
+        Future
+    }
+
+    LLMGateway <|.. DefaultLLMGateway
+    LLMProviderResolver <|.. ConfiguredProviderResolver
+    LLMProvider <|.. AzureAIFoundryProvider
+    LLMProvider <|.. OpenAICompatibleProvider
+
+    DefaultLLMGateway --> LLMProviderResolver : resolves through
+    DefaultLLMGateway --> LLMProvider : invokes
+    ConfiguredProviderResolver --> LLMProvider : selects from
+
+    AgentRuntime --> LLMGateway : depends on
+```
+
+The Agent Runtime has no edge to `LLMProvider`. That absence is the design: a
+provider reaches business logic only as normalised data on a response.
+
+## Implementation Map
+
+| Concern | Location | Layer |
+| --- | --- | --- |
+| Gateway contract | `agent_platform_sdk.interfaces.llm_gateway` | SDK |
+| Provider contract | `agent_platform_sdk.interfaces.llm_provider` | SDK |
+| Provider-resolution port | `agent_platform_sdk.interfaces.llm_provider_resolver` | SDK |
+| Common request / response models | `agent_platform_sdk.dto.completion` | SDK |
+| Retry and timeout policies | `agent_platform_sdk.policies` | SDK |
+| Gateway implementation | `agent_platform.gateway` | Backend |
+| Gateway configuration | `agent_platform.configuration.settings.LLMGatewaySettings` | Backend |
+| Provider implementations | `agent_platform.providers` | Infrastructure |
+
+Only the last row may import a vendor SDK.
+
+## Deferred by Design
+
+The following are architecturally provided for and deliberately unimplemented.
+Each has a named seam, so adding it changes one component rather than many.
+
+| Capability | Seam | Status |
+| --- | --- | --- |
+| Model-to-provider routing | `LLMProviderResolver` | Milestone 03 (registry-backed) |
+| Policy-based model selection | `LLMProviderResolver` | Future |
+| Failover and fallback models | `LLMProviderResolver` | Future |
+| Health-based provider exclusion | `LLMProviderResolver` | Future |
+| Structured output enforcement | `CompletionRequest.response_format` | Milestone 05 |
+| Tool calling | `CompletionRequest.tool_ids` | Milestone 04 |
+
+No implementation may add failover silently. A request answered by a provider
+the caller did not ask for, with nothing recording the substitution, makes
+evaluation data incomparable and an incident unreconstructable.
+
+---
+
+# 31. Model Registry
 
 The Model Registry is the authoritative catalog of models.
 
@@ -1073,7 +1257,7 @@ Models should be discoverable dynamically.
 
 ---
 
-# 31. Runtime Model Resolution
+# 32. Runtime Model Resolution
 
 The runtime resolves a model using:
 
@@ -1113,7 +1297,7 @@ The initial implementation uses static configuration.
 
 ---
 
-# 32. Tool Registry
+# 33. Tool Registry
 
 Purpose
 
@@ -1179,7 +1363,7 @@ Capabilities
 
 ---
 
-# 33. Tool Provider Interface
+# 34. Tool Provider Interface
 
 Every tool implements:
 
@@ -1199,7 +1383,7 @@ Avoid returning provider-specific formats.
 
 ---
 
-# 34. Prompt Registry
+# 35. Prompt Registry
 
 Prompts are first-class assets.
 
@@ -1237,7 +1421,7 @@ Prompt A/B Testing
 
 ---
 
-# 35. Memory Registry
+# 36. Memory Registry
 
 Purpose
 
@@ -1277,7 +1461,7 @@ Supported Features
 
 ---
 
-# 36. Memory Provider Interface
+# 37. Memory Provider Interface
 
 Required operations:
 
@@ -1299,7 +1483,7 @@ Memory providers should be interchangeable.
 
 ---
 
-# 37. Search Provider
+# 38. Search Provider
 
 Search is abstracted.
 
@@ -1339,7 +1523,7 @@ Caching
 
 ---
 
-# 38. Embedding Provider
+# 39. Embedding Provider
 
 Not required for MVP.
 
@@ -1359,7 +1543,7 @@ Future implementations should not affect existing agents.
 
 ---
 
-# 39. Vector Store Provider
+# 40. Vector Store Provider
 
 Not required initially.
 
@@ -1383,7 +1567,7 @@ Support interface only.
 
 ---
 
-# 40. Evaluation Provider
+# 41. Evaluation Provider
 
 Purpose
 
@@ -1417,7 +1601,7 @@ A/B Comparison
 
 ---
 
-# 41. Configuration Registry
+# 42. Configuration Registry
 
 Configuration should be centrally managed.
 
@@ -1437,7 +1621,7 @@ Configuration should be validated before runtime starts.
 
 ---
 
-# 42. Dependency Injection
+# 43. Dependency Injection
 
 The platform uses constructor injection.
 
@@ -1463,7 +1647,7 @@ This enables testing and provider replacement.
 
 ---
 
-# 43. Factory Pattern
+# 44. Factory Pattern
 
 Factories are responsible for creating implementations.
 
@@ -1485,7 +1669,7 @@ Factories resolve implementations using registries.
 
 ---
 
-# 44. Capability Discovery
+# 45. Capability Discovery
 
 Rather than checking provider names, check capabilities.
 
@@ -1509,7 +1693,7 @@ Routing decisions should use capabilities, not provider identity.
 
 ---
 
-# 45. Runtime Plugin Model
+# 46. Runtime Plugin Model
 
 The platform should support runtime plugins.
 
@@ -1537,7 +1721,7 @@ Future versions may support dynamic loading without application restart.
 
 ---
 
-# 46. Registry Relationships
+# 47. Registry Relationships
 
 ```mermaid
 flowchart TD
@@ -1566,7 +1750,7 @@ ProviderFactory --> GeminiProvider
 
 ---
 
-# 47. Design Rule
+# 48. Design Rule
 
 Every replaceable capability must have:
 
@@ -1592,7 +1776,7 @@ No business logic should know which implementation is active.
 
 ---
 
-# 48. Platform Topology
+# 49. Platform Topology
 
 The platform is divided into two logical planes.
 
@@ -1648,7 +1832,7 @@ The Control Plane should not participate in request execution.
 
 ---
 
-# 49. End-to-End Request Flow
+# 50. End-to-End Request Flow
 
 ```mermaid
 sequenceDiagram
@@ -1708,7 +1892,7 @@ UI-->>User: Display
 
 ---
 
-# 50. Streaming Lifecycle
+# 51. Streaming Lifecycle
 
 Streaming uses Server-Sent Events (SSE).
 
@@ -1726,7 +1910,11 @@ Runtime
 
 ↓
 
-Provider
+LLM Gateway
+
+↓
+
+LLM Provider
 
 ↓
 
@@ -1774,7 +1962,7 @@ Cancellation
 
 ---
 
-# 51. Azure Deployment Topology
+# 52. Azure Deployment Topology
 
 ```mermaid
 flowchart TD
@@ -1799,6 +1987,14 @@ Agent Runtime
 
 ↓
 
+LLM Gateway
+
+↓
+
+LLM Provider
+
+↓
+
 Azure AI Foundry
 
 ↓
@@ -1816,7 +2012,7 @@ Backend --> Azure Container Registry
 
 ---
 
-# 52. Initial Azure Resources
+# 53. Initial Azure Resources
 
 Provision using Bicep and Azure Developer CLI.
 
@@ -1858,7 +2054,7 @@ Service Bus
 
 ---
 
-# 53. Container Architecture
+# 54. Container Architecture
 
 Frontend
 
@@ -1894,7 +2090,7 @@ Conversation state is externalized.
 
 ---
 
-# 54. Local Development Architecture
+# 55. Local Development Architecture
 
 ```mermaid
 flowchart TD
@@ -1938,7 +2134,7 @@ No API keys required for Azure AI Foundry during local development.
 
 ---
 
-# 55. Authentication Flow
+# 56. Authentication Flow
 
 Development
 
@@ -1980,7 +2176,7 @@ Application code should not change between environments.
 
 ---
 
-# 56. Secret Management
+# 57. Secret Management
 
 Development
 
@@ -2004,7 +2200,7 @@ Never commit secrets.
 
 ---
 
-# 57. Observability Flow
+# 58. Observability Flow
 
 ```mermaid
 flowchart LR
@@ -2028,7 +2224,7 @@ Metrics --> Azure Monitor
 
 ---
 
-# 58. Logging Pipeline
+# 59. Logging Pipeline
 
 Every request generates:
 
@@ -2064,7 +2260,7 @@ Streaming Metrics
 
 ---
 
-# 59. Metrics Pipeline
+# 60. Metrics Pipeline
 
 Capture:
 
@@ -2098,7 +2294,7 @@ User Satisfaction
 
 ---
 
-# 60. Cost Tracking Pipeline
+# 61. Cost Tracking Pipeline
 
 ```mermaid
 flowchart LR
@@ -2152,7 +2348,7 @@ Conversation
 
 ---
 
-# 61. Health Monitoring
+# 62. Health Monitoring
 
 Expose endpoints:
 
@@ -2178,7 +2374,7 @@ Runtime Status
 
 ---
 
-# 62. Failure Handling
+# 63. Failure Handling
 
 The runtime should gracefully handle:
 
@@ -2210,7 +2406,7 @@ Every failure must be logged and traced.
 
 ---
 
-# 63. Resiliency
+# 64. Resiliency
 
 Support:
 
@@ -2230,7 +2426,7 @@ Queue-based Execution (future)
 
 ---
 
-# 64. CI/CD Deployment Flow
+# 65. CI/CD Deployment Flow
 
 ```mermaid
 flowchart LR
@@ -2272,7 +2468,7 @@ Container Apps
 
 ---
 
-# 65. Deployment Strategy
+# 66. Deployment Strategy
 
 Support:
 
@@ -2296,7 +2492,7 @@ Rolling Updates
 
 ---
 
-# 66. Platform Design Rule
+# 67. Platform Design Rule
 
 Every request should be:
 
@@ -2318,7 +2514,7 @@ No request should execute outside the Agent Runtime.
 
 ---
 
-# 67. Repository Architecture
+# 68. Repository Architecture
 
 Recommended repository layout
 
@@ -2359,7 +2555,7 @@ multi-agent-ai-platform/
 
 ---
 
-# 68. Backend Package Structure
+# 69. Backend Package Structure
 
 ```
 backend/
@@ -2413,7 +2609,7 @@ Every package owns a single responsibility.
 
 ---
 
-# 69. Frontend Structure
+# 70. Frontend Structure
 
 ```
 frontend/
@@ -2447,7 +2643,7 @@ Business logic should remain in the backend.
 
 ---
 
-# 70. SDK Structure
+# 71. SDK Structure
 
 Purpose
 
@@ -2475,7 +2671,7 @@ Never duplicate interfaces across services.
 
 ---
 
-# 71. Configuration Hierarchy
+# 72. Configuration Hierarchy
 
 Configuration precedence:
 
@@ -2497,7 +2693,7 @@ Configuration should be immutable after startup.
 
 ---
 
-# 72. Prompt Organization
+# 73. Prompt Organization
 
 ```
 prompts/
@@ -2533,7 +2729,7 @@ Compatible Models
 
 ---
 
-# 73. Registry Relationships
+# 74. Registry Relationships
 
 ```mermaid
 flowchart TD
@@ -2559,7 +2755,7 @@ The runtime never bypasses registries.
 
 ---
 
-# 74. Adding a New Agent
+# 75. Adding a New Agent
 
 Checklist
 
@@ -2601,7 +2797,7 @@ No existing agents should require modification.
 
 ---
 
-# 75. Adding a New LLM Provider
+# 76. Adding a New LLM Provider
 
 Checklist
 
@@ -2631,7 +2827,7 @@ Business logic must remain unchanged.
 
 ---
 
-# 76. Adding a New Tool
+# 77. Adding a New Tool
 
 Checklist
 
@@ -2663,7 +2859,7 @@ Update Documentation
 
 ---
 
-# 77. Adding a New Memory Provider
+# 78. Adding a New Memory Provider
 
 Checklist
 
@@ -2689,7 +2885,7 @@ No agent changes required.
 
 ---
 
-# 78. Extension Rules
+# 79. Extension Rules
 
 New functionality should be added through:
 
@@ -2705,7 +2901,7 @@ Avoid modifying core runtime unless introducing a platform capability.
 
 ---
 
-# 79. Architecture Decision Records
+# 80. Architecture Decision Records
 
 Every major design decision requires an ADR.
 
@@ -2731,7 +2927,7 @@ docs/adr/
 
 ---
 
-# 80. Recommended Technology Versions
+# 81. Recommended Technology Versions
 
 Python 3.12+
 
@@ -2777,7 +2973,7 @@ Prefer stable releases unless a newer version provides a compelling platform ben
 
 ---
 
-# 81. Architecture Review Checklist
+# 82. Architecture Review Checklist
 
 Before introducing any feature, verify:
 
@@ -2807,7 +3003,7 @@ Before introducing any feature, verify:
 
 ---
 
-# 82. Definition of Platform Ready
+# 83. Definition of Platform Ready
 
 The platform is considered ready when it can:
 
@@ -2837,7 +3033,7 @@ Support adding a new tool without modifying agents
 
 ---
 
-# 83. Long-Term Vision
+# 84. Long-Term Vision
 
 The platform should evolve into an Enterprise AI Platform capable of:
 
@@ -2879,7 +3075,7 @@ The architecture should enable this evolution through extension rather than rede
 
 ---
 
-# 84. Architecture Principles Summary
+# 85. Architecture Principles Summary
 
 Always favor:
 
@@ -2909,7 +3105,7 @@ Architecture should enable change rather than resist it.
 
 ---
 
-# 85. Glossary
+# 86. Glossary
 
 Agent Runtime
 Coordinates request execution and agent orchestration.

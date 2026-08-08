@@ -30,7 +30,9 @@ from agent_platform_sdk.events import RuntimeEvent, RuntimeEventName
 from agent_platform_sdk.interfaces import (
     EmbeddingProvider,
     EvaluationProvider,
+    LLMGateway,
     LLMProvider,
+    LLMProviderResolver,
     MemoryProvider,
     PromptProvider,
     Provider,
@@ -47,6 +49,7 @@ from agent_platform_sdk.types import (
     ExecutionState,
     HealthStatus,
     MessageRole,
+    ResponseFormat,
 )
 
 __version__ = "0.1.0"
@@ -67,7 +70,9 @@ __all__ = [
     "ExecutionState",
     "HealthReport",
     "HealthStatus",
+    "LLMGateway",
     "LLMProvider",
+    "LLMProviderResolver",
     "MemoryProvider",
     "Message",
     "MessageRole",
@@ -78,6 +83,7 @@ __all__ = [
     "PromptVariable",
     "Provider",
     "Registry",
+    "ResponseFormat",
     "RetryPolicy",
     "RuntimeEvent",
     "RuntimeEventName",

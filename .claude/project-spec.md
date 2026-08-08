@@ -308,6 +308,22 @@ FR-015
 
 The system shall support Infrastructure as Code.
 
+FR-016
+
+The platform shall communicate with LLM providers through a provider-neutral request and response contract compatible with OpenAI-style Chat APIs.
+
+FR-017
+
+The platform shall allow future OpenAI-compatible endpoints to be added without modifying business logic.
+
+FR-018
+
+Provider-specific SDKs shall remain isolated within provider implementations.
+
+FR-019
+
+The Agent Runtime shall remain independent of any provider-specific request or response schema.
+
 ---
 
 # 10. Non-Functional Requirements

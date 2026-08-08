@@ -11,7 +11,7 @@ agent_platform (backend)  ->  agent_platform_sdk  ->  agent_platform_shared
 
 | Package | Responsibility |
 | --- | --- |
-| `interfaces/` | Provider and registry protocols (`LLMProvider`, `MemoryProvider`, `ToolProvider`, …) |
+| `interfaces/` | Provider, gateway and registry protocols (`LLMGateway`, `LLMProvider`, `MemoryProvider`, `ToolProvider`, …) |
 | `contracts/` | Cross-cutting contracts such as `ExecutionContext` and health reporting |
 | `dto/` | Data transfer objects exchanged across process and layer boundaries |
 | `events/` | Runtime event definitions published during execution |
@@ -36,3 +36,12 @@ implementations do not need to inherit from platform base classes. This keeps
 providers structurally typed and independently testable.
 
 See [ADR-0004](../../docs/adr/0004-provider-abstraction-via-protocols.md).
+
+## Which contract business logic depends on
+
+`LLMGateway`, not `LLMProvider`. The gateway is the single path to model
+inference; `LLMProvider` is infrastructure-facing and named only by the gateway
+and the composition root. The distinction is what keeps retry, timeout,
+telemetry and cost handling out of orchestration.
+
+See [ADR-0006](../../docs/adr/0006-llm-gateway-and-provider-neutral-contract.md).

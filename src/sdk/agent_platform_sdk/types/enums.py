@@ -15,6 +15,7 @@ __all__ = [
     "ExecutionState",
     "HealthStatus",
     "MessageRole",
+    "ResponseFormat",
 ]
 
 
@@ -62,6 +63,23 @@ class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+
+
+class ResponseFormat(StrEnum):
+    """Shape the caller asks the model to produce.
+
+    Values follow the OpenAI-style Chat API vocabulary, which every
+    OpenAI-compatible endpoint already understands, so a future provider adapter
+    passes the value straight through instead of translating it.
+
+    Declared as part of the common request contract (``architecture.md`` §30).
+    Honouring it is a provider concern: a provider must only accept a format for
+    which the resolved model declares the matching capability
+    (:attr:`Capability.JSON_MODE`, :attr:`Capability.STRUCTURED_OUTPUT`).
+    """
+
+    TEXT = "text"
+    JSON_OBJECT = "json_object"
 
 
 class ExecutionState(StrEnum):

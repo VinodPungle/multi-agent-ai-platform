@@ -15,12 +15,14 @@ from pydantic import ValidationError as PydanticValidationError
 from agent_platform_sdk import (
     Capability,
     CompletionRequest,
+    CompletionResponse,
     ExecutionContext,
     LLMProvider,
     Message,
     MessageRole,
     ModelDescriptor,
     Provider,
+    ResponseFormat,
     TokenUsage,
 )
 from agent_platform_sdk.policies import BudgetPolicy, RetryPolicy
@@ -184,6 +186,76 @@ class TestCompletionRequestValidation:
         request = CompletionRequest(model_id="gemma-4", messages=())
 
         assert request.temperature is None
+
+    @pytest.mark.parametrize("top_p", [0.0, 1.1])
+    def test_top_p_outside_range_is_rejected(self, top_p: float) -> None:
+        with pytest.raises(PydanticValidationError):
+            CompletionRequest(model_id="gemma-4", messages=(), top_p=top_p)
+
+    def test_optional_parameters_default_to_provider_behaviour(self) -> None:
+        """An unset parameter must not be sent as a value the caller never chose."""
+        request = CompletionRequest(model_id="gemma-4", messages=())
+
+        assert request.system_prompt is None
+        assert request.top_p is None
+        assert request.response_format is None
+        assert request.metadata == {}
+
+
+class TestCommonContractIsOpenAIShaped:
+    """The contract is written in the dialect every OpenAI-compatible endpoint speaks.
+
+    Not cosmetic: it is what makes an adapter for such an endpoint a rename
+    rather than a translation layer (``architecture.md`` §30).
+    """
+
+    def test_the_request_carries_the_documented_common_fields(self) -> None:
+        expected = {
+            "model_id",
+            "messages",
+            "system_prompt",
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "stop_sequences",
+            "tool_ids",
+            "response_format",
+            "metadata",
+        }
+
+        assert set(CompletionRequest.model_fields) == expected
+
+    def test_the_response_carries_the_documented_common_fields(self) -> None:
+        expected = {
+            "message",
+            "model_id",
+            "provider_id",
+            "usage",
+            "estimated_cost",
+            "latency_ms",
+            "finish_reason",
+            "provider_metadata",
+            "model_metadata",
+        }
+
+        assert set(CompletionResponse.model_fields) == expected
+
+    def test_response_metadata_is_flat_strings(self) -> None:
+        """Vendor objects must be flattened at the provider boundary, not carried."""
+        response = CompletionResponse(
+            message=Message(role=MessageRole.ASSISTANT, content="hi"),
+            model_id="gemma-4",
+            provider_id="azure-foundry",
+            provider_metadata={"upstream_request_id": "abc-123"},
+            model_metadata={"deployment": "gemma-4-managed"},
+        )
+
+        assert response.provider_metadata["upstream_request_id"] == "abc-123"
+        assert response.model_metadata["deployment"] == "gemma-4-managed"
+
+    def test_response_format_uses_the_openai_vocabulary(self) -> None:
+        assert ResponseFormat.JSON_OBJECT.value == "json_object"
+        assert ResponseFormat.TEXT.value == "text"
 
 
 class TestRetryPolicy:
