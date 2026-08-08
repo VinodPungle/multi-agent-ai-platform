@@ -737,6 +737,69 @@ Free   multi-turn memory ..... 4 messages stored across 2 turns
 
 ---
 
+## Follow-up — Tavily search provider ✅
+
+Added on request, so answers can reflect the live web.
+
+**What was there:** `duckduckgo` (keyless, default) and `mock` (offline). The
+Instant Answer API returns abstracts, not ranked pages — strong on "what is the
+Eiffel Tower", weak on anything current.
+
+**What was added:** `TavilySearchProvider` — ranked web results with extracted
+content, built for retrieval augmentation.
+
+It reaches every agent at once, because agents declare the *tool*, not a
+backend. Adding it changed **no agent, no tool, no runtime code**: one module,
+one member on a literal, one factory branch. That is the third demonstration of
+the provider abstraction, after Azure AI Foundry and FW-Kimi-K3.
+
+DuckDuckGo stays the default. A fresh clone with no accounts must still perform
+a real search.
+
+### The key is treated as a real secret
+
+Tavily offers no identity-based authentication, so a key is the only mechanism
+available — the same narrow exception `CLAUDE.md` allows. It is a `SecretStr`,
+sent in an `Authorization` header rather than a query string or body, and
+excluded from every error message because an upstream body can echo request
+headers back. Three tests assert it does not leak: not into the URL, not into
+the body, not into startup logs.
+
+Selecting `tavily` without a key stops startup naming the missing field, rather
+than failing the first search with an upstream 401.
+
+### Deliberate choices
+
+- **`raw_content` is discarded.** Tavily returns up to tens of kilobytes per
+  result, and every character would be spent context in the next prompt — a
+  quiet way to multiply the cost of one search.
+- **`health_check` does not search.** Every call is billed, so a probe would
+  turn monitoring into spend at whatever rate the orchestrator polls.
+- **`search_depth` is configuration.** `advanced` is better and costs more.
+
+### Verification
+
+```
+ruff / black / mypy --strict ... clean (142 files)
+pytest ....................... 622 passed   (592 before)
+                               30 new, over httpx.MockTransport — no key,
+                               no account, no billed call in CI
+```
+
+Also fixed in passing: a duplicated `perf_counter()` call in the DuckDuckGo
+provider that started the timer twice.
+
+### Known limitations
+
+1. **No live verification.** The suite covers request shaping, parsing, error
+   mapping and secret handling against a mocked transport, but no real Tavily
+   call has been made — there is no account. The first real search is the first
+   proof, exactly as with a scale-to-zero deployment.
+2. **No caching.** Repeated identical searches in one conversation are repeated
+   cost. It matters more now that searches are billed.
+
+---
+
 ## Next: Milestone 06 — Infrastructure as Code
 
 Not started. Awaiting approval before any work begins.

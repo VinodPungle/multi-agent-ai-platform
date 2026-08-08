@@ -7,6 +7,7 @@ Operational procedures for diagnosing and resolving production incidents.
 | Runbook | Covers |
 | --- | --- |
 | [Azure AI Foundry setup](./azure-ai-foundry-setup.md) | Connecting a deployment, RBAC, keyless auth, scale-to-zero, troubleshooting |
+| [Search providers](./search-providers.md) | Choosing a search backend, Tavily keys, cost control |
 
 ## Not yet populated
 

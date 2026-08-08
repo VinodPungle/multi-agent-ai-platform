@@ -27,7 +27,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource, PydanticBaseSettingsSource
 
@@ -429,19 +429,40 @@ class SearchSettings(BaseModel):
 
     `mock` returns fabricated results with no network call, which is what CI and
     an offline laptop need. `duckduckgo` performs a real, keyless search.
+    `tavily` performs ranked web search built for retrieval augmentation, and
+    needs an API key.
 
-    Chosen as a literal rather than assumed, so adding a keyed provider (Brave,
-    Tavily, Bing) is a new member plus a factory branch — not a new configuration
-    shape every deployment has to learn.
+    A literal rather than an open string, so adding a backend is a new member
+    plus a factory branch — not a new configuration shape every deployment has
+    to learn.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: Literal["mock", "duckduckgo"] = Field(
+    provider: Literal["mock", "duckduckgo", "tavily"] = Field(
         default="duckduckgo",
         description=(
             "Search backend. `duckduckgo` needs no API key, so the documented local "
-            "setup performs real searches with no signup."
+            "setup performs real searches with no signup. `tavily` returns ranked "
+            "web results and current information, and requires a key."
+        ),
+    )
+    tavily_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Tavily API key. Required when `provider` is `tavily`, ignored "
+            "otherwise. A `SecretStr` so it cannot be printed by accident: "
+            "repr, logs and error messages all render it as '**********'. "
+            "Tavily offers no identity-based authentication, so a key is the "
+            "only mechanism available — the narrow exception `CLAUDE.md` allows."
+        ),
+    )
+    search_depth: Literal["basic", "advanced"] = Field(
+        default="basic",
+        description=(
+            "Tavily search depth. `advanced` returns better evidence and costs "
+            "more per search, so it is a deployment decision rather than a "
+            "hardcoded preference."
         ),
     )
     timeout_seconds: float = Field(
@@ -462,6 +483,18 @@ class SearchSettings(BaseModel):
             "prompt, so this is a cost setting as much as a quality one."
         ),
     )
+
+    @model_validator(mode="after")
+    def _require_a_key_for_tavily(self) -> Self:
+        """Fail at startup when Tavily is selected but unconfigured.
+
+        The alternative is a platform that starts happily and fails the first
+        search with an upstream 401 that names nothing useful.
+        """
+        if self.provider == "tavily" and not self.tavily_api_key.get_secret_value().strip():
+            message = "Search provider is 'tavily' but search.tavily_api_key is not set."
+            raise ValueError(message)
+        return self
 
 
 class WorkflowSettings(BaseModel):

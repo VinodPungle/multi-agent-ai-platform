@@ -40,6 +40,7 @@ from agent_platform.registries import (
 from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform.search.duckduckgo_search_provider import DuckDuckGoSearchProvider
 from agent_platform.search.mock_search_provider import MockSearchProvider
+from agent_platform.search.tavily_search_provider import TavilySearchProvider
 from agent_platform.security.credentials import build_azure_credential
 from agent_platform.tools.internet_search_tool import InternetSearchTool
 from agent_platform.tools.tool_executor import ToolExecutor
@@ -140,12 +141,25 @@ def build_model_registry() -> ModelRegistry:
 def build_search_provider(settings: PlatformSettings) -> SearchProvider:
     """Return the configured search backend.
 
-    Both satisfy one interface, so the internet-search tool cannot tell which it
-    has — which is what makes a keyed provider a later addition rather than a
-    change to the tool.
+    All three satisfy one interface, so the internet-search tool cannot tell
+    which it has — which is why Tavily was a new module and this branch rather
+    than a change to the tool, the runtime or any agent.
+
+    The choice reaches every agent at once: agents declare the *tool*, not a
+    search backend, so switching this switches what all of them search with.
     """
     if settings.search.provider == "mock":
         return MockSearchProvider()
+
+    if settings.search.provider == "tavily":
+        return TavilySearchProvider(
+            # Unwrapped at the single point of use. It travels as a `SecretStr`
+            # everywhere else so it cannot be logged by accident.
+            api_key=settings.search.tavily_api_key.get_secret_value(),
+            timeout_seconds=settings.search.timeout_seconds,
+            search_depth=settings.search.search_depth,
+        )
+
     return DuckDuckGoSearchProvider(timeout_seconds=settings.search.timeout_seconds)
 
 

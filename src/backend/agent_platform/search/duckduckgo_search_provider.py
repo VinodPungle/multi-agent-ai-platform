@@ -137,8 +137,6 @@ class DuckDuckGoSearchProvider:
 
         started = perf_counter()
 
-        started = perf_counter()
-
         try:
             response = await self._client.get(
                 _ENDPOINT,
