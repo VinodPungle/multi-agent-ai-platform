@@ -181,7 +181,7 @@ jobs:
 
             docker run --rm \
               --volume "${PWD}/scan:/scan" \
-              ${TRIVY_IMAGE} image \
+              "${TRIVY_IMAGE}" image \
                 --input "/scan/${service}.tar" \
                 --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
                 --format sarif \
@@ -191,12 +191,22 @@ jobs:
         env:
           TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.65.0
 
-      - name: Publish image scan results
+      # One upload per image. CodeQL refuses two SARIF runs under a single
+      # category, and the failure mode if it did not is worse: the second would
+      # replace the first, so one image's findings would quietly never appear.
+      - name: Publish backend image scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: scan
-          category: container-images
+          sarif_file: scan/trivy-backend.sarif
+          category: container-backend
+
+      - name: Publish frontend image scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: scan/trivy-frontend.sarif
+          category: container-frontend
 
       - name: Fail on high or critical image findings
         # Only findings with a fix available. A CVE nobody can remediate stops
@@ -208,7 +218,7 @@ jobs:
             echo "Gating ${service}"
             docker run --rm \
               --volume "${PWD}/scan:/scan" \
-              ${TRIVY_IMAGE} image \
+              "${TRIVY_IMAGE}" image \
                 --input "/scan/${service}.tar" \
                 --severity ${{ inputs.fail-on-severity }} \
                 --ignore-unfixed \

@@ -152,7 +152,7 @@ jobs:
           docker run --rm \
             --volume "${PWD}:/workspace" \
             --workdir /workspace \
-            ${TRIVY_IMAGE} fs \
+            "${TRIVY_IMAGE}" fs \
               --scanners vuln,secret,misconfig \
               --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
               --format sarif \
@@ -177,7 +177,7 @@ jobs:
           docker run --rm \
             --volume "${PWD}:/workspace" \
             --workdir /workspace \
-            ${TRIVY_IMAGE} fs \
+            "${TRIVY_IMAGE}" fs \
               --scanners vuln,secret \
               --severity HIGH,CRITICAL \
               --ignore-unfixed \
