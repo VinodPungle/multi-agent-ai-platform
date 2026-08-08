@@ -6,8 +6,8 @@ acceptance criterion is verified, not merely implemented.
 | # | Milestone | Status | Completed |
 | --- | --- | --- | --- |
 | 01 | [Repository Foundation](./milestone-01-foundation.md) | ✅ **Complete** | 2026-08-08 |
-| 01.5 | [Developer Experience](./milestone-01.5-developer-experience.md) | ⬜ Next | — |
-| 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ⬜ Not started | — |
+| 01.5 | [Developer Experience](./milestone-01.5-developer-experience.md) | ✅ **Complete** | 2026-08-08 |
+| 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ⬜ Next | — |
 | 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ⬜ Not started | — |
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ⬜ Not started | — |
 | 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Not started | — |
@@ -178,11 +178,77 @@ behaviour was changed, only added.
 
 ---
 
-## Next: Milestone 01.5 — Developer Experience
+## Milestone 01.5 — Developer Experience ✅
 
-Not started. Scope per
-[`milestone-01.5-developer-experience.md`](./milestone-01.5-developer-experience.md):
-Dev Container, VS Code workspace settings and launch profiles, pre-commit hooks,
-`.editorconfig`, a task runner, and bootstrap scripts.
+### Acceptance criteria
 
-Awaiting approval before any work begins.
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Fresh clone can be started with documented steps | ✅ | Bootstrap run end to end; `verify_environment.py` reported the real machine correctly (7 tools, Task absent and correctly optional) |
+| Pre-commit hooks execute successfully | ✅ | `pre-commit run --all-files` — 17 hooks pass; `--hook-stage pre-push` — 9 pass |
+| VS Code recommends required extensions | ✅ | `.vscode/extensions.json`, with conflicting extensions listed as unwanted |
+| Backend launches in debug mode | ✅ | Two configurations, including one without the reloader so startup breakpoints are hit |
+| Frontend launches in debug mode | ✅ | Chrome and Edge, with a background task matcher so the browser waits for Vite |
+| `task dev` starts the environment | ⚠️ Partial | `Taskfile.yml` defines it as parallel `dev:backend` + `dev:frontend`, and both underlying commands were run directly and work. **Task itself was never executed** — it is not installed on the verification machine, and installing it was not in scope. The YAML is schema-valid; the task semantics are unproven. `.vscode/tasks.json` covers the same ground without Task. |
+
+### Defects found during verification, and fixed
+
+Both were found by running the tooling rather than by reading it, and neither was
+visible in the configuration itself.
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| The pinned `ruff-pre-commit` hook (0.8.4) rejected code the project's ruff (0.16.2, from `uv.lock`) accepts — `BLE001` on a deliberately blind `except` in `health_service.py`. The hook would have blocked a commit CI passes. | First `pre-commit run --all-files` | All Python and Node hooks converted to `repo: local`, invoked through `uv run` / `npm`, so `uv.lock` is the only place a version is declared. Recorded in [ADR-0007](../adr/0007-task-runner-and-git-hook-strategy.md). |
+| `check-json` failed on `src/frontend/tsconfig*.json` — TypeScript configs are JSONC, and the hook only knew about the `.vscode/` and `.devcontainer/` exclusions | Same run | Exclusion extended to the tsconfig files |
+| `mixed-line-ending --fix=lf` would have rewritten `bootstrap.ps1`, which `.gitattributes` checks out as CRLF — the file would have shown as modified forever | Reading the two configs against each other before running the hook | Hook excludes `.ps1/.psm1/.psd1/.bat/.cmd`; `.editorconfig` corrected to match `.gitattributes`, which it had disagreed with for `.ps1` |
+
+The `end-of-file-fixer` hook also added a missing final newline to
+`.claude/CLAUDE.md` and removed a stray blank line from `.claude/project-spec.md`
+— the first thing the new hooks did was find two files that had been wrong since
+Milestone 01.
+
+### Verification performed
+
+```
+pre-commit (pre-commit stage) ... 17 hooks passed
+pre-commit (pre-push stage) ..... 9 hooks passed
+verify_environment.py ........... exit 0 on a real machine, Task correctly optional
+ruff ............................ All checks passed
+black ........................... 97 files unchanged
+mypy --strict ................... no issues in 97 source files
+pytest .......................... 236 passed (197 before)
+```
+
+### Deviations from the milestone document
+
+| Deviation | Reason |
+| --- | --- |
+| `scripts/verify_environment.py`, not `verify-environment.py` | A hyphen makes the module non-importable, so it could not be unit-tested. The platform requires every component to be independently testable; the file is invoked by path, so nothing else changes. |
+| `scripts/clean.py` added | `Taskfile.yml` needs a cache-cleaning task, and `rm -rf` is not a command on Windows. |
+
+### Known limitations
+
+1. **The Dev Container has never been built.** Its Dockerfile and
+   `devcontainer.json` are committed and reviewed, but no container has been
+   started from them. The versions it pins (uv 0.5.14, Task 3.40.1, Bicep
+   v0.32.4) are unverified against each other.
+2. **No `task` command has ever been run.** Task is not installed on the
+   verification machine. Every command inside `Taskfile.yml` was executed
+   directly and passes; the file is schema-valid YAML; but the runner's own
+   behaviour — parallel `deps`, `dir:` handling, task-to-task references — is
+   unproven. The first person to install Task should run `task --list` and
+   `task check` before trusting it.
+3. **`.vscode/launch.json` "attach to container" needs debugpy in the image**,
+   which the Compose stack does not start. The configuration is correct; the
+   container-side half arrives when someone needs it.
+4. **Nothing checks that `.env.example` and the settings model agree** — carried
+   over from Milestone 01, and now joined by a second drift risk: the Dev
+   Container's tool versions and the ones CI installs.
+5. **Hooks require bootstrap to have run.** A clone-then-commit sequence gets a
+   "command not found" from the hook rather than a clean skip.
+
+---
+
+## Next: Milestone 02 — Chat UI and Session Memory
+
+Not started. Awaiting approval before any work begins.

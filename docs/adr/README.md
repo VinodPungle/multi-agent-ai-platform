@@ -16,6 +16,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0004](./0004-provider-abstraction-via-protocols.md) | Declare provider contracts as `typing.Protocol` | Accepted | 01 |
 | [0005](./0005-opentelemetry-first-observability.md) | OpenTelemetry-first observability | Accepted | 01 |
 | [0006](./0006-llm-gateway-and-provider-neutral-contract.md) | Route every model call through an LLM Gateway | Accepted | 01 → 01.5 |
+| [0007](./0007-task-runner-and-git-hook-strategy.md) | Task as the command runner; hooks share the project's tool versions | Accepted | 01.5 |
 
 ## Writing one
 
