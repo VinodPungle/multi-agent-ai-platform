@@ -1,0 +1,85 @@
+# =============================================================================
+# Dependabot — automated dependency update proposals
+# =============================================================================
+# Required by the handbook ("Dependency Management"). Weekly rather than daily:
+# a flood of individual pull requests gets ignored, which is worse than none.
+#
+# Updates are grouped by concern so one review covers a coherent change instead
+# of ten pull requests that must be merged together anyway.
+# =============================================================================
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      python-dev-tooling:
+        # Linters and type checkers land together; a version bump in one often
+        # requires a configuration change alongside the others.
+        patterns: ['ruff', 'black', 'mypy', 'pytest*']
+      python-observability:
+        patterns: ['opentelemetry*', 'structlog']
+      python-minor-and-patch:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /src/frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      frontend-dev-tooling:
+        patterns: ['eslint*', 'prettier*', '@typescript-eslint/*', 'typescript-eslint', 'typescript']
+      frontend-testing:
+        patterns: ['vitest', '@vitest/*', '@testing-library/*', 'jsdom']
+      frontend-build:
+        patterns: ['vite', '@vitejs/*', 'tailwindcss', '@tailwindcss/*']
+      frontend-minor-and-patch:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    ignore:
+      # React major upgrades carry migration work and must be a deliberate,
+      # planned change rather than an automated pull request.
+      - dependency-name: react
+        update-types: ['version-update:semver-major']
+      - dependency-name: react-dom
+        update-types: ['version-update:semver-major']
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    commit-message:
+      prefix: 'chore(ci)'
+    groups:
+      github-actions:
+        patterns: ['*']
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: docker
+    directories:
+      - /docker
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    commit-message:
+      prefix: 'chore(docker)'

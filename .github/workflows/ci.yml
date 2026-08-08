@@ -1,0 +1,301 @@
+# =============================================================================
+# Continuous Integration
+# =============================================================================
+# Runs every gate the handbook requires of a pull request: formatting, linting,
+# type checking, unit tests, integration tests, container builds and
+# infrastructure validation.
+#
+# Jobs are split by concern rather than run as one long script, so a failure
+# names its cause in the job list and an unrelated area still reports its own
+# result.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run for the same ref. Queuing obsolete runs
+# wastes minutes and delays feedback on the commit that matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend (lint, types, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        # `--frozen` fails if uv.lock is out of date with the manifests, which
+        # catches a dependency change committed without its lock update.
+        run: uv sync --all-packages --frozen
+
+      - name: Ruff (lint)
+        run: uv run ruff check --output-format=github .
+
+      - name: Black (format check)
+        run: uv run black --check --diff .
+
+      - name: mypy (strict type check)
+        run: uv run mypy
+
+      - name: pytest
+        run: uv run pytest --cov --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        # `always()`: coverage from a failing run is exactly what a developer
+        # needs to see.
+        if: always()
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (lint, types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: src/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` installs the locked tree exactly and fails on lock drift.
+        run: npm ci --no-audit --no-fund
+
+      - name: Prettier (format check)
+        run: npm run format:check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm run test:coverage
+
+      - name: Build
+        env:
+          VITE_API_BASE_URL: http://localhost:8000
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: src/frontend/dist
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  containers:
+    name: Container builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          target: production
+          push: false
+          load: true
+          tags: agent-platform-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          target: production
+          push: false
+          load: true
+          tags: agent-platform-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: Verify the backend image serves traffic
+        # Building an image proves it compiles, not that it runs. Starting it
+        # and probing /live is what catches a broken entrypoint, a missing
+        # runtime dependency, or a permission error from running as non-root.
+        run: |
+          docker run --detach --name backend-ci \
+            --env PLATFORM_APP__ENVIRONMENT=testing \
+            --publish 8000:8000 \
+            agent-platform-backend:ci
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://localhost:8000/live > /dev/null; then
+              echo "Backend responded after ${attempt} attempt(s)."
+              curl --silent http://localhost:8000/health
+              docker rm --force backend-ci
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Backend did not become healthy. Container logs:"
+          docker logs backend-ci
+          docker rm --force backend-ci
+          exit 1
+
+      - name: Verify the frontend image serves the bundle
+        run: |
+          docker run --detach --name frontend-ci --publish 8080:8080 \
+            agent-platform-frontend:ci
+
+          for attempt in $(seq 1 20); do
+            if curl --silent --fail http://localhost:8080/healthz > /dev/null; then
+              echo "Frontend responded after ${attempt} attempt(s)."
+              curl --silent --fail http://localhost:8080/ | head -c 200
+              docker rm --force frontend-ci
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Frontend did not become healthy. Container logs:"
+          docker logs frontend-ci
+          docker rm --force frontend-ci
+          exit 1
+
+  # ---------------------------------------------------------------------------
+  infrastructure:
+    name: Infrastructure validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep
+          sudo mv bicep /usr/local/bin/bicep
+          bicep --version
+
+      - name: Lint Bicep templates
+        # `--stdout` discards the compiled ARM output: this step checks the
+        # templates are valid, it does not produce a deployment artefact.
+        run: |
+          for template in $(find infra/bicep -name '*.bicep' -not -path '*/modules/*'); do
+            echo "Linting ${template}"
+            bicep build "${template}" --stdout > /dev/null
+          done
+
+      - name: Validate azure.yaml
+        run: |
+          python -c "import yaml,pathlib,sys; yaml.safe_load(pathlib.Path('azure.yaml').read_text()); print('azure.yaml is valid YAML')"
+
+  # ---------------------------------------------------------------------------
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the filesystem for vulnerabilities and secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy-results.sarif
+          # Report everything; the gate below fails only on severities worth
+          # blocking a merge over.
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+
+      - name: Publish results to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Fail on high or critical findings
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+  # ---------------------------------------------------------------------------
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, containers, infrastructure, security]
+    if: always()
+
+    steps:
+      - name: Verify every gate passed
+        # A single required status check for branch protection. Without this,
+        # protection rules must list every job by name and silently stop
+        # covering any job added later.
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "Job results: ${results}"
+          for result in ${results}; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::At least one CI gate did not pass."
+              exit 1
+            fi
+          done
+          echo "All CI gates passed."

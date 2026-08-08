@@ -1,0 +1,61 @@
+# =============================================================================
+# Azure Developer CLI (azd) configuration
+# =============================================================================
+# Must live at the repository root — azd looks for it there and nowhere else.
+# The Bicep templates it references live under infra/bicep.
+#
+# Deployment workflow (project-spec.md §25):
+#
+#   az login
+#   az account set --subscription <id>
+#   azd up
+#
+# Milestone 01 ships this as a *scaffold*: the service definitions and the
+# resource graph are declared, but provisioning is not exercised until
+# Milestone 06 (Infrastructure as Code). Declaring it now means the deployment
+# shape is reviewed alongside the architecture rather than invented later.
+# =============================================================================
+
+name: multi-agent-ai-platform
+metadata:
+  template: multi-agent-ai-platform@0.1.0
+
+# Bicep, not Terraform: the handbook standardises on Bicep and azd.
+infra:
+  provider: bicep
+  path: infra/bicep
+  module: main
+
+services:
+  backend:
+    project: .
+    language: docker
+    host: containerapp
+    docker:
+      path: docker/backend.Dockerfile
+      # Build context is the repository root: the backend is one member of a uv
+      # workspace and needs its siblings' manifests to resolve.
+      context: .
+      target: production
+
+  frontend:
+    project: .
+    language: docker
+    host: containerapp
+    docker:
+      path: docker/frontend.Dockerfile
+      context: .
+      target: production
+
+hooks:
+  postprovision:
+    posix:
+      shell: sh
+      continueOnError: false
+      interactive: false
+      run: echo "Provisioning complete. Backend and frontend are deployed as Container Apps."
+    windows:
+      shell: pwsh
+      continueOnError: false
+      interactive: false
+      run: Write-Host "Provisioning complete. Backend and frontend are deployed as Container Apps."
