@@ -58,6 +58,15 @@ class AgentRequest(BaseModel):
             "to be serialised by some convention the prompt author cannot see."
         ),
     )
+    tool_exchange: tuple[Message, ...] = Field(
+        default=(),
+        description=(
+            "Messages produced *after* `input` during a tool-calling turn: the "
+            "assistant's tool request, then each tool's result. Separate from "
+            "`history` because ordering matters — they belong after the user's "
+            "message, and history belongs before it. Empty on a first call."
+        ),
+    )
     model_id: str = Field(description="Model the runtime selected for this turn.")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
