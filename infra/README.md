@@ -17,14 +17,14 @@ infra/
 `azure.yaml` lives at the repository root, because azd looks for it there and
 nowhere else.
 
-## Status: Milestone 01 scaffold
+## Status: Milestone 06 complete
 
-This milestone declares the resource graph and provisions the foundation. It is
-**not exercised end to end** — `azd up` is first run in Milestone 06.
+The resource graph is complete and deployable with `azd up`. Deployment
+procedure, secrets, environments, cost and troubleshooting:
+[`docs/runbooks/deployment.md`](../docs/runbooks/deployment.md).
 
-Declaring the shape now means the deployment topology is reviewed alongside the
-architecture rather than invented under deadline pressure later. CI validates
-that every template compiles on every pull request.
+CI compiles every template and every environment parameter file on each pull
+request.
 
 | Resource | Purpose | Milestone |
 | --- | --- | --- |
@@ -35,16 +35,30 @@ that every template compiles on every pull request.
 | Key Vault | Production secret store, RBAC authorisation | 01 |
 | Container Registry | Backend and frontend images, admin user disabled | 01 |
 | Container Apps environment | Shared runtime for both services | 01 |
-| Container Apps (backend, frontend) | Deployed by azd from `azure.yaml` | 06 |
-| Azure AI Foundry project + model deployment | Inference | 05 |
+| Container Apps (backend, frontend) | Both services, with Key Vault secret references | 06 |
+| Azure AI Foundry account + model deployment | Inference, local auth disabled | 06 |
 | Cosmos DB, Redis, Azure AI Search | Persistent memory and retrieval | 08+ |
 
 ## Design decisions
 
 **No secrets in templates or outputs.** The Application Insights connection
 string is deliberately not a module output: it embeds an instrumentation key,
-and deployment outputs are readable by anyone with read access to the deployment
-history. Milestone 06 writes it to Key Vault.
+and deployment outputs are readable — permanently — by anyone with read access
+to the resource group. `modules/telemetry-secret.bicep` reads it and writes it
+straight to Key Vault, so the value never crosses a module boundary. The
+Container Apps read both secrets as Key Vault references resolved by the managed
+identity at revision start, so they are absent from the app's environment
+definition too.
+
+**Keys are disabled, not merely unused.** The AI Foundry account is provisioned
+with `disableLocalAuth: true`. An API key cannot be used even by someone who
+wants to, which closes the "key copied into a repository" incident at the
+resource rather than by convention.
+
+**Environments differ in capacity and posture, not in shape.** One template,
+four typed `.bicepparam` files. Testing provisions no inference resource at all
+and the template configures the mock provider to match — a deployment that
+cannot call a model must not be told it can.
 
 **Managed identity everywhere.** The registry's admin user is disabled and no
 Azure service is reached with an API key. Application code uses

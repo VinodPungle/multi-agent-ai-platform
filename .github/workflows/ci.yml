@@ -233,6 +233,16 @@ jobs:
             bicep build "${template}" --stdout > /dev/null
           done
 
+      - name: Validate environment parameter files
+        # Every environment, not just the default one. A `.bicepparam` that
+        # references a parameter the template no longer has is only discovered
+        # at deploy time otherwise — which is to say, during a deployment.
+        run: |
+          for params in infra/environments/*.bicepparam; do
+            echo "Validating ${params}"
+            bicep build-params "${params}" --stdout > /dev/null
+          done
+
       - name: Validate azure.yaml
         run: |
           python -c "import yaml,pathlib,sys; yaml.safe_load(pathlib.Path('azure.yaml').read_text()); print('azure.yaml is valid YAML')"

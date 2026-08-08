@@ -13,12 +13,21 @@ Each environment must have **independent configuration, independent resources,
 independent secrets and independent monitoring** (`CLAUDE.md`, "Environment
 Strategy").
 
-## Not yet populated
+## Populated in Milestone 06
 
-Milestone 01 provisions nothing, so there is nothing to parameterise. The files
-arrive in Milestone 06 alongside the first real deployment.
+| File | Model | Search | Min replicas | Retention |
+| --- | --- | --- | --- | --- |
+| `development.bicepparam` | Foundry | duckduckgo | 0 | 30 days |
+| `testing.bicepparam` | none — mock | mock | 0 | 30 days |
+| `staging.bicepparam` | Foundry | tavily | 1 | 60 days |
+| `production.bicepparam` | Foundry | tavily | 1 | 90 days |
 
-Creating empty files now would suggest a deployment path exists that does not.
+CI compiles all four on every pull request, so a file referencing a parameter
+the template no longer has fails review rather than a deployment.
+
+Numeric parameters live here rather than in `main.parameters.json`: azd
+substitutes environment variables as strings, and ARM rejects a string for an
+`int`. A `.bicepparam` file is typed and checked at build time.
 
 ## Rules for when they land
 

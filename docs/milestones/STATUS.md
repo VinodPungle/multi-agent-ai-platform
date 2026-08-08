@@ -11,8 +11,8 @@ acceptance criterion is verified, not merely implemented.
 | 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ✅ **Complete** | 2026-08-08 |
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ✅ **Complete** | 2026-08-08 |
 | 05 | [Azure AI Foundry, FW-Kimi-K3](./milestone-05-azure-ai-foundry-gemma4.md) | ✅ **Complete** | 2026-08-08 |
-| 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Next | — |
-| 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Not started | — |
+| 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⚠️ **Complete, not provisioned** | 2026-08-08 |
+| 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Next | — |
 | 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Not started | — |
 | 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Not started | — |
 
@@ -873,6 +873,108 @@ retires the previous entry's caveat that Tavily had never been called live.
 
 ---
 
-## Next: Milestone 06 — Infrastructure as Code
+## Milestone 06 — Infrastructure as Code ⚠️
+
+Complete and validated against Azure. **Not provisioned** — `azd up` creates
+billable resources, and that is the user's decision to make, not mine. See
+"What has not been proven" below.
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Infrastructure deploys with azd | ⚠️ | `az deployment sub validate` passes against the real subscription; `azd up` has not been run |
+| All required resources provisioned | ✅ | Declared and compiling: identity, Log Analytics, App Insights, Key Vault, ACR, Container Apps environment, two Container Apps, AI Foundry account + model deployment |
+| Managed Identity configured | ✅ | User-assigned, with `AcrPull`, `Key Vault Secrets User` and `Cognitive Services User`; the apps carry it and pull images with it |
+| Application Insights connected | ✅ | Connection string written to Key Vault and read by the backend as a secret reference |
+| Environment-specific parameters | ✅ | Four typed `.bicepparam` files, all compiling in CI |
+| No manual portal configuration | ✅ | Nothing outside `az login` |
+
+### What was built
+
+Milestone 01 left a scaffold — identity, monitoring, vault, registry, Container
+Apps environment. This milestone completes the graph: the AI Foundry account and
+model deployment, both Container Apps, and the secret plumbing between them.
+
+Three decisions worth stating:
+
+**Keys are disabled, not merely unused.** The Foundry account sets
+`disableLocalAuth: true`, so an API key cannot be used even by someone who wants
+to. That closes the "key copied into a repository" incident at the resource
+rather than by convention — which matters, because it happened twice in this
+project's own history.
+
+**No secret crosses a module boundary or a deployment output.** Milestone 01
+promised the Application Insights connection string would never be an output;
+`telemetry-secret.bicep` keeps that promise by reading it and writing it to Key
+Vault inside one scope. `main.bicep` learns the secret's URI and nothing more.
+Both container secrets are Key Vault references resolved by the managed identity
+at revision start, so they are absent from the app's environment definition too.
+
+**Environments differ in capacity and posture, not in shape.** One template,
+four parameter files. Testing provisions no inference resource at all, because
+nothing there calls a model and idle capacity buys nothing.
+
+### Defects found while building, and fixed
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| **The deployed frontend would have called `http://localhost:8000`.** Vite bakes its API URL into the bundle at *build* time and the Dockerfile's default is localhost; nginx does not proxy the API. Every request from a user's browser would have gone to their own machine, and it would have looked like a CORS fault. | Reading the Dockerfile instead of assuming the frontend read configuration at runtime | `azure.yaml` passes `SERVICE_BACKEND_URI` as a Docker build argument. Works only because azd provisions before it builds |
+| With no Foundry account the template still declared the provider enabled with an empty endpoint. The backend's own startup validation would have refused to boot — correctly, and only after a full deployment. | Writing the testing environment's parameters, which deliberately has no inference resource | `foundryEnabled` drives the provider, model id and mock flag together |
+| The Application Insights connection string was not available as a module output — by a deliberate Milestone 01 decision I had forgotten | `bicep build` failed | A module that reads and writes it within one scope, honouring the original decision rather than working around it |
+| CI compiled the templates but never the environment parameter files | Adding the files | A CI step that builds all four |
+
+The first is the one worth remembering: it would have produced a deployment that
+provisioned cleanly, reported healthy, and did not work.
+
+### Verification performed
+
+```
+az bicep build ................ main.bicep and 8 modules compile, no warnings
+az bicep build-params ......... all 4 environment files compile
+az deployment sub validate .... PASSED against the real subscription
+az deployment sub what-if ..... resolves 5 top-level creates (see below)
+infra/scripts/preflight.sh .... run against the real subscription, all checks pass
+preflight.ps1 ................. parses cleanly
+
+pytest ........................ 626 passed (unchanged — no application code changed)
+ruff / black / mypy --strict .. clean
+```
+
+### What has not been proven
+
+**`azd up` has never been run.** Everything above is static validation plus
+Azure's own template validator. That is the strongest evidence available without
+spending money, and it is genuinely weaker than a deployment:
+
+1. **`what-if` resolved only 5 changes.** It does not expand nested modules whose
+   inputs depend on runtime values, so most of the graph is unverified by it.
+   This is a what-if limitation, not a signal that the resources are missing.
+2. **The Fireworks model deployment may need a marketplace agreement** that
+   Bicep cannot accept on your behalf. The existing FW-Kimi-K3 deployment was
+   created through the portal, which handles that step.
+3. **Quota is unknown** for `DataZoneStandard` capacity 25 in a new account.
+4. **Container Apps Key Vault references** are declared correctly but unexercised;
+   a wrong identity or a missing role shows up as a revision that will not start.
+
+Given this project's own record — every milestone so far has had at least one
+defect that only a live call could find — the honest expectation is that the
+first `azd up` surfaces something.
+
+### Known limitations
+
+1. **No CI/CD.** Deployment is a command someone runs. Milestone 07.
+2. **No VNet.** Public ingress with TLS. A Milestone 08 hardening step, and a
+   parameter change rather than a redesign.
+3. **`traceSampleRatio` is an `int`**, so a fractional sampling ratio cannot be
+   set from a parameter file. Production wants 0.2. Needs the parameter type
+   changed to `string` and parsed, or ARM's `json()` used.
+4. **No blue/green and no multi-region** — both explicitly out of scope.
+5. **The identity cannot be granted a role on a Foundry account it does not
+   create**, so `PROVISION_AI_FOUNDRY=false` needs one manual role assignment.
+
+---
+
+## Next: Milestone 07 — DevSecOps and CI/CD
 
 Not started. Awaiting approval before any work begins.

@@ -8,6 +8,7 @@ Operational procedures for diagnosing and resolving production incidents.
 | --- | --- |
 | [Azure AI Foundry setup](./azure-ai-foundry-setup.md) | Connecting a deployment, RBAC, keyless auth, scale-to-zero, troubleshooting |
 | [Search providers](./search-providers.md) | Choosing a search backend, Tavily keys, cost control |
+| [Deployment](./deployment.md) | Provisioning with azd, secrets, environments, cost, teardown |
 
 ## Not yet populated
 
@@ -16,7 +17,6 @@ land with the systems they cover:
 
 | Runbook | Milestone |
 | --- | --- |
-| Deployment and rollback | 07 |
 | Provider outage — failover and degraded operation | 08 |
 | Cost spike investigation | 08 |
 | Latency regression triage | 08 |
