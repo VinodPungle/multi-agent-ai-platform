@@ -1,0 +1,229 @@
+# =============================================================================
+# Task runner — https://taskfile.dev
+# =============================================================================
+#   task                 list every available task
+#   task bootstrap       one-time setup of a fresh clone
+#   task dev             backend + frontend, both with hot reload
+#   task check           every gate CI runs, in the order CI runs them
+#
+# Install Task:
+#   winget install Task.Task        # Windows
+#   brew install go-task/tap/go-task
+#   sudo snap install task --classic
+#
+# Task rather than Make: the primary development platform here is Windows,
+# where `make` is not present and installing it drags in a Unix toolchain. Task
+# is a single cross-platform binary, and its YAML is readable by people who do
+# not know Make's rules. See ADR-0007.
+#
+# Every command below is the same command CI runs. Where the two could drift,
+# the pipeline is authoritative and this file follows it.
+# =============================================================================
+
+version: '3'
+
+vars:
+  FRONTEND_DIR: src/frontend
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # Discovery
+  # ---------------------------------------------------------------------------
+  default:
+    desc: List every available task
+    silent: true
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+  bootstrap:
+    desc: Set up a fresh clone — verify tooling, install dependencies, install hooks
+    cmds:
+      - task: verify
+      - task: install
+      - task: hooks:install
+      - cmd: echo ""
+        silent: true
+      - cmd: echo "Ready. Run 'task dev' to start the platform."
+        silent: true
+
+  verify:
+    desc: Check that every required tool is installed and recent enough
+    cmds:
+      - python scripts/verify_environment.py
+
+  install:
+    desc: Install backend and frontend dependencies from the lock files
+    deps: [install:backend, install:frontend]
+
+  install:backend:
+    desc: Sync the Python workspace from uv.lock
+    cmds:
+      - uv sync --all-packages
+
+  install:frontend:
+    desc: Install the frontend dependency tree from package-lock.json
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      # `npm ci` installs the locked tree exactly and fails on lock drift,
+      # which is what CI does. `npm install` would silently update the lock.
+      - npm ci --no-audit --no-fund
+
+  hooks:install:
+    desc: Install the Git pre-commit and pre-push hooks
+    cmds:
+      - uv run pre-commit install --install-hooks
+
+  hooks:run:
+    desc: Run every pre-commit hook against every file
+    cmds:
+      - uv run pre-commit run --all-files
+
+  hooks:update:
+    desc: Update pinned hook revisions to their latest releases
+    cmds:
+      - uv run pre-commit autoupdate
+
+  # ---------------------------------------------------------------------------
+  # Running
+  # ---------------------------------------------------------------------------
+  dev:
+    desc: Run backend and frontend directly, both with hot reload
+    # Dependencies run in parallel, so both servers start together and one
+    # terminal shows both logs. Ctrl+C stops both.
+    deps: [dev:backend, dev:frontend]
+
+  dev:backend:
+    desc: Run the API with auto-reload on http://localhost:8000
+    cmds:
+      - uv run uvicorn agent_platform.api.app:create_app --factory --reload
+
+  dev:frontend:
+    desc: Run the Vite dev server on http://localhost:5173
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run dev
+
+  up:
+    desc: Start the full stack in Docker Compose
+    cmds:
+      - docker compose up --build
+
+  down:
+    desc: Stop the Compose stack
+    cmds:
+      - docker compose down
+
+  logs:
+    desc: Follow Compose logs
+    cmds:
+      - docker compose logs -f
+
+  # ---------------------------------------------------------------------------
+  # Quality gates — `check` is what CI runs
+  # ---------------------------------------------------------------------------
+  check:
+    desc: Run every quality gate, backend and frontend
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: typecheck
+      - task: test
+
+  lint:
+    desc: Lint backend and frontend
+    deps: [lint:backend, lint:frontend]
+
+  lint:backend:
+    cmds:
+      - uv run ruff check .
+
+  lint:frontend:
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run lint
+
+  format:
+    desc: Format backend and frontend in place
+    cmds:
+      - uv run ruff check --fix .
+      - uv run black .
+      - cmd: npm run format
+        dir: '{{.FRONTEND_DIR}}'
+
+  format:check:
+    desc: Verify formatting without changing anything
+    cmds:
+      - uv run black --check --diff .
+      - cmd: npm run format:check
+        dir: '{{.FRONTEND_DIR}}'
+
+  typecheck:
+    desc: Type-check backend and frontend
+    deps: [typecheck:backend, typecheck:frontend]
+
+  typecheck:backend:
+    cmds:
+      - uv run mypy
+
+  typecheck:frontend:
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run typecheck
+
+  test:
+    desc: Run backend and frontend test suites
+    deps: [test:backend, test:frontend]
+
+  test:backend:
+    cmds:
+      - uv run pytest
+
+  test:frontend:
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm test
+
+  test:cov:
+    desc: Run both suites with coverage reporting
+    cmds:
+      - uv run pytest --cov
+      - cmd: npm run test:coverage
+        dir: '{{.FRONTEND_DIR}}'
+
+  test:watch:
+    desc: Re-run frontend tests on change
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run test:watch
+
+  # ---------------------------------------------------------------------------
+  # Containers and infrastructure
+  # ---------------------------------------------------------------------------
+  build:
+    desc: Build both production images, as CI does
+    cmds:
+      - docker build -f docker/backend.Dockerfile --target production -t agent-platform-backend:local .
+      - docker build -f docker/frontend.Dockerfile --target production -t agent-platform-frontend:local .
+
+  bicep:
+    desc: Compile the Bicep templates to check they are valid
+    cmds:
+      - bicep build infra/bicep/main.bicep --stdout > /dev/null
+
+  # ---------------------------------------------------------------------------
+  # Housekeeping
+  # ---------------------------------------------------------------------------
+  clean:
+    desc: Remove build, test and type-check caches
+    cmds:
+      - uv run python scripts/clean.py
+
+  lock:
+    desc: Refresh both lock files after a dependency change
+    cmds:
+      - uv lock
+      - cmd: npm install --package-lock-only
+        dir: '{{.FRONTEND_DIR}}'

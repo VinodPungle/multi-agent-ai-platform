@@ -1,0 +1,134 @@
+// =============================================================================
+// Debug configurations
+// =============================================================================
+// F5 on "Full stack" is the intended default: it starts the API under the
+// debugger and the Vite dev server together, which is the shape of nearly every
+// debugging session on this project.
+//
+// `justMyCode` is false throughout. When a request behaves unexpectedly the
+// answer is usually inside FastAPI, Pydantic or Starlette, and a debugger that
+// refuses to step into them cannot show it.
+// =============================================================================
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: API (reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "agent_platform.api.app:create_app",
+        "--factory",
+        "--reload",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "1-backend", "order": 1 }
+    },
+    {
+      "name": "Backend: API (no reload, breakpoints in startup)",
+      "type": "debugpy",
+      "request": "launch",
+      // The platform entry point rather than uvicorn's CLI, and no `--reload`:
+      // the reloader runs the app in a child process, so breakpoints in
+      // application startup and configuration validation are never hit under
+      // the configuration above. This one stops in them.
+      "module": "agent_platform",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "1-backend", "order": 2 }
+    },
+    {
+      "name": "Backend: current test file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-vv", "--no-cov"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "2-tests", "order": 1 }
+    },
+    {
+      "name": "Backend: all tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-vv", "--no-cov"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "2-tests", "order": 2 }
+    },
+    {
+      "name": "Backend: environment check",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/verify_environment.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "3-tools", "order": 1 }
+    },
+    {
+      "name": "Frontend: Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/src/frontend/src",
+      // Starts Vite first and waits for it to report a URL, so the browser does
+      // not open on a port nothing is listening to yet.
+      "preLaunchTask": "frontend: dev server",
+      // Leaves the dev server running when the browser closes: restarting Vite
+      // for every debugging session wastes several seconds each time.
+      "postDebugTask": "",
+      "sourceMapPathOverrides": {
+        "/@fs/*": "*",
+        "/src/*": "${workspaceFolder}/src/frontend/src/*"
+      },
+      "presentation": { "group": "4-frontend", "order": 1 }
+    },
+    {
+      "name": "Frontend: Edge",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/src/frontend/src",
+      "preLaunchTask": "frontend: dev server",
+      "presentation": { "group": "4-frontend", "order": 2 }
+    },
+    {
+      "name": "Backend: attach to container",
+      "type": "debugpy",
+      "request": "attach",
+      // For debugging the Compose stack rather than a local process. Requires
+      // debugpy listening inside the container, which is not enabled by
+      // default — see docs/developer-setup.md.
+      "connect": { "host": "localhost", "port": 5678 },
+      "pathMappings": [
+        {
+          "localRoot": "${workspaceFolder}/src/backend/agent_platform",
+          "remoteRoot": "/app/src/backend/agent_platform"
+        }
+      ],
+      "justMyCode": false,
+      "presentation": { "group": "5-remote", "order": 1 }
+    }
+  ],
+
+  "compounds": [
+    {
+      "name": "Full stack (backend + frontend)",
+      "configurations": ["Backend: API (reload)", "Frontend: Chrome"],
+      "stopAll": true,
+      "presentation": { "group": "0-default", "order": 1 }
+    }
+  ]
+}

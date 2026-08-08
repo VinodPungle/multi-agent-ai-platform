@@ -1,0 +1,185 @@
+// =============================================================================
+// VS Code tasks
+// =============================================================================
+// These mirror `Taskfile.yml` and invoke `uv` and `npm` directly rather than
+// shelling out to `task`. Task is optional tooling; the editor's build and test
+// commands must work on a clone where it was never installed.
+//
+// Ctrl+Shift+B runs "check: all gates".
+// =============================================================================
+{
+  "version": "2.0.0",
+  "tasks": [
+    // -------------------------------------------------------------------------
+    // Servers
+    // -------------------------------------------------------------------------
+    {
+      "label": "frontend: dev server",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/src/frontend" },
+      "isBackground": true,
+      "problemMatcher": {
+        // Without a matcher VS Code waits forever for a task it thinks is still
+        // starting, and the browser launch that depends on it never fires.
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^\\s*(.*)$",
+          "file": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*VITE.*",
+          "endsPattern": ".*(ready in|Local:).*"
+        }
+      },
+      "presentation": { "group": "servers", "panel": "dedicated" }
+    },
+    {
+      "label": "backend: dev server",
+      "type": "shell",
+      "command": "uv run uvicorn agent_platform.api.app:create_app --factory --reload",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "servers", "panel": "dedicated" }
+    },
+
+    // -------------------------------------------------------------------------
+    // Gates
+    // -------------------------------------------------------------------------
+    {
+      "label": "check: all gates",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "backend: format check",
+        "backend: lint",
+        "backend: typecheck",
+        "backend: test",
+        "frontend: lint",
+        "frontend: typecheck",
+        "frontend: test"
+      ],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "backend: lint",
+      "type": "shell",
+      "command": "uv run ruff check .",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$python"],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "backend: format",
+      "type": "shell",
+      "command": "uv run ruff check --fix . && uv run black .",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "backend: format check",
+      "type": "shell",
+      "command": "uv run black --check --diff .",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "backend: typecheck",
+      "type": "shell",
+      "command": "uv run mypy",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$python"],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "backend: test",
+      "type": "shell",
+      "command": "uv run pytest",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "backend: test (coverage)",
+      "type": "shell",
+      "command": "uv run pytest --cov",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "frontend: lint",
+      "type": "shell",
+      "command": "npm run lint",
+      "options": { "cwd": "${workspaceFolder}/src/frontend" },
+      "problemMatcher": ["$eslint-stylish"],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "frontend: typecheck",
+      "type": "shell",
+      "command": "npm run typecheck",
+      "options": { "cwd": "${workspaceFolder}/src/frontend" },
+      "problemMatcher": ["$tsc"],
+      "presentation": { "group": "gates" }
+    },
+    {
+      "label": "frontend: test",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}/src/frontend" },
+      "problemMatcher": [],
+      "presentation": { "group": "gates" }
+    },
+
+    // -------------------------------------------------------------------------
+    // Setup and containers
+    // -------------------------------------------------------------------------
+    {
+      "label": "setup: bootstrap",
+      "type": "shell",
+      "command": "uv run --no-project python scripts/verify_environment.py && uv sync --all-packages && npm --prefix src/frontend ci --no-audit --no-fund && uv run pre-commit install --install-hooks",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "setup" }
+    },
+    {
+      "label": "setup: verify environment",
+      "type": "shell",
+      "command": "uv run --no-project python scripts/verify_environment.py",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "setup" }
+    },
+    {
+      "label": "setup: install git hooks",
+      "type": "shell",
+      "command": "uv run pre-commit install --install-hooks",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "setup" }
+    },
+    {
+      "label": "compose: up",
+      "type": "shell",
+      "command": "docker compose up --build",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "containers", "panel": "dedicated" }
+    },
+    {
+      "label": "compose: down",
+      "type": "shell",
+      "command": "docker compose down",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "group": "containers" }
+    }
+  ]
+}

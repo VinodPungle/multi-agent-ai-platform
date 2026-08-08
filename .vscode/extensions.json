@@ -1,0 +1,57 @@
+// =============================================================================
+// Recommended extensions
+// =============================================================================
+// VS Code prompts for these on first open. The list is limited to extensions
+// that make the editor behave the way this repository's tooling expects — an
+// extension nobody's workflow depends on is one more thing to install for no
+// gain, and long lists get dismissed unread.
+// =============================================================================
+{
+  "recommendations": [
+    // --- Python -------------------------------------------------------------
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "charliermarsh.ruff", // the linter configured in pyproject.toml
+    "ms-python.black-formatter", // the formatter CI checks against
+
+    // --- Frontend -----------------------------------------------------------
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "bradlc.vscode-tailwindcss",
+    "vitest.explorer",
+
+    // --- Containers and infrastructure --------------------------------------
+    "ms-azuretools.vscode-docker",
+    "ms-azuretools.vscode-containers",
+    "ms-vscode-remote.remote-containers",
+    "ms-azuretools.vscode-bicep",
+    "ms-azuretools.vscode-azureresourcegroups",
+
+    // --- Files this repository is full of ------------------------------------
+    "redhat.vscode-yaml", // schema validation for workflows and Taskfile
+    "tamasfe.even-better-toml", // pyproject.toml
+    "yzhang.markdown-all-in-one", // docs/ and the ADRs
+    "bierner.markdown-mermaid", // architecture diagrams render in preview
+    "editorconfig.editorconfig",
+    "task.vscode-task", // run Taskfile targets from the command palette
+
+    // --- Assistance ---------------------------------------------------------
+    "anthropic.claude-code",
+    "github.copilot",
+    "github.copilot-chat",
+    "github.vscode-github-actions"
+  ],
+
+  // Extensions that actively conflict with the toolchain configured here.
+  // Listing them suppresses the recommendation and explains the reason in one
+  // place, rather than in whichever pull request the disagreement surfaces in.
+  "unwantedRecommendations": [
+    // Formats Python with a different opinion from Black. Two formatters on
+    // save produce a file that changes every time it is saved.
+    "ms-python.autopep8",
+    "ms-python.isort", // Ruff owns import sorting
+    "ms-python.flake8", // Ruff replaces it
+    "ms-python.pylint" // Ruff plus mypy --strict cover this
+  ]
+}
