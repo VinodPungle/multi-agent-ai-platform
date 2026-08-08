@@ -14,13 +14,63 @@ from __future__ import annotations
 
 from dependency_injector import containers, providers
 
+from agent_platform.application.chat_service import ChatService
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
+from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
+from agent_platform_sdk.interfaces.llm_provider import LLMProvider
+from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
+from agent_platform_sdk.interfaces.provider import Provider
 from agent_platform_shared.clock import SystemClock
 
-__all__ = ["ApplicationContainer"]
+__all__ = ["ApplicationContainer", "build_health_probes", "build_llm_providers"]
+
+
+def build_llm_providers(settings: PlatformSettings) -> tuple[LLMProvider, ...]:
+    """Return the LLM providers this deployment should register.
+
+    A function rather than a container expression because the choice is
+    conditional, and a conditional expressed in `dependency-injector`'s
+    declarative syntax is harder to read and impossible to unit-test on its own.
+
+    The mock provider is the only entry today, and configuration validation
+    already refuses to start a production-like environment with it enabled — so
+    this is a second line of defence, not the first. Azure AI Foundry is
+    appended here in Milestone 05, and nothing else changes.
+    """
+    providers: list[LLMProvider] = []
+
+    if settings.mock_provider.enabled and not settings.app.environment.is_production_like:
+        providers.append(
+            MockLLMProvider(
+                provider_id=settings.mock_provider.provider_id,
+                model_id=settings.mock_provider.model_id,
+                chunk_delay_seconds=settings.mock_provider.chunk_delay_seconds,
+            )
+        )
+
+    return tuple(providers)
+
+
+def build_health_probes(
+    memory: MemoryProvider,
+    llm_providers: tuple[LLMProvider, ...],
+) -> tuple[Provider, ...]:
+    """Return every component ``/ready`` should probe.
+
+    A function for the same reason as :func:`build_llm_providers`, plus a typing
+    one: the health service takes a tuple of :class:`Provider`, and assembling
+    it here keeps that contract intact instead of handing the container's list
+    provider to a parameter that expects a tuple.
+
+    Order is deliberate — memory first, then inference. A readiness payload
+    reads top to bottom, and the cheapest, most fundamental dependency should
+    be the first line an operator sees.
+    """
+    return (memory, *llm_providers)
 
 
 class ApplicationContainer(containers.DeclarativeContainer):
@@ -48,18 +98,28 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: deterministic instead of racing the wall clock.
     clock = providers.Singleton(SystemClock)
 
-    #: Aggregates component health for the readiness endpoint.
+    #: Conversation state. The interface is what every consumer depends on;
+    #: replacing this with Redis is a change to this line alone.
+    memory_provider = providers.Singleton(
+        InMemorySessionMemoryProvider,
+        max_conversations=settings.provided.memory.max_conversations,
+        max_messages_per_conversation=settings.provided.memory.max_messages_per_conversation,
+    )
+
+    #: Registered LLM providers, chosen by configuration. Azure AI Foundry joins
+    #: the mock provider here in Milestone 05 — no consumer of the gateway
+    #: changes when it does.
+    llm_providers = providers.Singleton(build_llm_providers, settings)
+
+    #: Aggregates component health for the readiness endpoint. Every registered
+    #: component is probed, so `/ready` reports the real state of the system
+    #: rather than only of the process.
     health_service = providers.Singleton(
         HealthService,
         settings=settings,
         clock=clock,
+        providers=providers.Callable(build_health_probes, memory_provider, llm_providers),
     )
-
-    #: Registered LLM providers. Empty until Milestone 05 registers Azure AI
-    #: Foundry. Declared now so that registering one is an addition here and
-    #: nowhere else — no consumer of the gateway changes when it becomes
-    #: non-empty.
-    llm_providers = providers.Object(())
 
     #: Answers which provider serves a model. Replaced by a registry-backed
     #: implementation in Milestone 03; the gateway is unaffected because it
@@ -79,4 +139,16 @@ class ApplicationContainer(containers.DeclarativeContainer):
         clock=clock,
         retry_policy=settings.provided.llm_gateway.retry,
         timeout_policy=settings.provided.llm_gateway.timeout,
+    )
+
+    #: The chat use case. Depends on the gateway and memory protocols only, so
+    #: it is unaffected by which provider or memory backend is configured.
+    chat_service = providers.Singleton(
+        ChatService,
+        gateway=llm_gateway,
+        memory=memory_provider,
+        clock=clock,
+        model_id=settings.provided.chat.model_id,
+        system_prompt=settings.provided.chat.system_prompt,
+        max_prompt_characters=settings.provided.chat.max_prompt_characters,
     )

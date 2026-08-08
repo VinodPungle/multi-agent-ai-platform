@@ -15,15 +15,22 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from agent_platform.application.chat_service import ChatService
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.dependencies.container import ApplicationContainer
+from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_shared import get_correlation_id, get_request_id
 
 __all__ = [
+    "ChatServiceDep",
     "ContainerDep",
+    "ExecutionContextDep",
     "HealthServiceDep",
     "SettingsDep",
+    "get_chat_service",
     "get_container",
+    "get_execution_context",
     "get_health_service",
     "get_platform_settings",
 ]
@@ -69,3 +76,34 @@ def get_health_service(container: ContainerDep) -> HealthService:
 
 
 HealthServiceDep = Annotated[HealthService, Depends(get_health_service)]
+
+
+def get_chat_service(container: ContainerDep) -> ChatService:
+    """Return the chat use case."""
+    service: ChatService = container.chat_service()
+    return service
+
+
+ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+
+
+def get_execution_context(settings: SettingsDep) -> ExecutionContext:
+    """Build the execution context for the current request.
+
+    The identifiers come from the correlation middleware, which has already
+    read the inbound headers or generated new values. Reading them from the
+    ambient context rather than re-deriving them here is what guarantees the
+    context, the log records and the response headers all carry the same ids.
+
+    Feature flags are resolved once, at entry, and carried on the context.
+    Resolving them per component would let one request see a flag change
+    halfway through — which produces behaviour no log can explain.
+    """
+    return ExecutionContext(
+        correlation_id=get_correlation_id() or ExecutionContext().correlation_id,
+        request_id=get_request_id() or ExecutionContext().request_id,
+        feature_flags=settings.features.as_dict(),
+    )
+
+
+ExecutionContextDep = Annotated[ExecutionContext, Depends(get_execution_context)]

@@ -35,15 +35,28 @@ from agent_platform_sdk.policies.timeout import TimeoutPolicy
 
 __all__ = [
     "AppSettings",
+    "ChatSettings",
     "Environment",
     "FeatureFlagSettings",
     "LLMGatewaySettings",
     "LoggingSettings",
+    "MemorySettings",
+    "MockProviderSettings",
     "PlatformSettings",
     "ServerSettings",
     "TelemetrySettings",
     "get_settings",
 ]
+
+#: Default instruction sent with every chat turn. Short and generic on purpose:
+#: the Prompt Registry takes ownership of prompts in Milestone 03, and a long
+#: prompt embedded here would be exactly what ``CLAUDE.md`` forbids. Overridable
+#: by configuration in the meantime.
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful assistant running on the Enterprise Multi-Agent AI Platform. "
+    "Answer clearly and concisely. Use Markdown for structure and fenced code blocks "
+    "with a language tag for code."
+)
 
 
 class Environment(StrEnum):
@@ -226,6 +239,98 @@ class LLMGatewaySettings(BaseModel):
     )
 
 
+class MemorySettings(BaseModel):
+    """Conversation memory configuration.
+
+    ``provider`` is a literal with one member today. Declared as a choice rather
+    than assumed, so adding Redis is a new member plus a factory branch — not a
+    new configuration shape that every deployment has to learn.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["in-memory"] = Field(
+        default="in-memory",
+        description="Memory backend. Redis, PostgreSQL and Cosmos DB join this list later.",
+    )
+    max_conversations: int = Field(
+        default=500,
+        gt=0,
+        description=(
+            "Conversations held before the least recently used is evicted. A cap is "
+            "mandatory, not tuning: an unbounded store fed by an HTTP endpoint lets "
+            "anyone who can send requests exhaust the process's memory."
+        ),
+    )
+    max_messages_per_conversation: int = Field(
+        default=200,
+        gt=0,
+        description="Messages kept per conversation. Oldest are dropped first.",
+    )
+
+
+class MockProviderSettings(BaseModel):
+    """The development provider that answers without calling a model.
+
+    Rejected in staging and production by
+    :meth:`PlatformSettings.enforce_environment_invariants`. A deployment that
+    silently served templated answers to real users would be far worse than one
+    that refuses to start.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Register the mock provider. Development and testing only. Defaults to false "
+            "so that the unsafe state is always the one someone chose explicitly — the "
+            "same posture as `app.debug`. Enabled in `.env.example` and in Compose, so "
+            "every documented local path still works with no manual step."
+        ),
+    )
+    provider_id: str = Field(default="mock", min_length=1)
+    model_id: str = Field(default="mock-echo", min_length=1)
+    chunk_delay_seconds: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=5.0,
+        description=(
+            "Pause between streamed chunks. Non-zero by default because a stream that "
+            "arrives instantly hides every bug that only appears when tokens trickle."
+        ),
+    )
+
+
+class ChatSettings(BaseModel):
+    """Chat behaviour that is a deployment decision rather than a code one."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_id: str = Field(
+        default="mock-echo",
+        min_length=1,
+        description=(
+            "Model requested for every turn. Changing provider or model is a "
+            "configuration change; no source file names a model."
+        ),
+    )
+    system_prompt: str = Field(
+        default=_DEFAULT_SYSTEM_PROMPT,
+        min_length=1,
+        description="Instruction sent with every turn. Owned by the Prompt Registry from M03.",
+    )
+    max_prompt_characters: int = Field(
+        default=32_000,
+        gt=0,
+        description=(
+            "Rejection threshold for one message. Characters rather than tokens because "
+            "no tokeniser is available before a provider is chosen; the model registry "
+            "enforces the real context window from Milestone 03."
+        ),
+    )
+
+
 class FeatureFlagSettings(BaseModel):
     """Runtime feature toggles.
 
@@ -298,6 +403,9 @@ class PlatformSettings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
+    mock_provider: MockProviderSettings = Field(default_factory=MockProviderSettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)
 
     @classmethod
@@ -358,6 +466,13 @@ class PlatformSettings(BaseSettings):
             errors.append(
                 "server.cors_origins must not be empty outside development — "
                 "the frontend origin must be listed."
+            )
+
+        if self.mock_provider.enabled:
+            errors.append(
+                "mock_provider.enabled must be false outside development — it answers "
+                "with templated text instead of calling a model, and a deployment that "
+                "served those answers to real users would look like a working system."
             )
 
         if errors:

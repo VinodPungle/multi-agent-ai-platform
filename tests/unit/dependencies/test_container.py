@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import pytest
 
+from agent_platform.application.chat_service import ChatService
 from agent_platform.application.health_service import HealthService
-from agent_platform.configuration.settings import PlatformSettings
-from agent_platform.dependencies.container import ApplicationContainer
+from agent_platform.configuration.settings import (
+    Environment,
+    MockProviderSettings,
+    PlatformSettings,
+)
+from agent_platform.dependencies.container import ApplicationContainer, build_llm_providers
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
+from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
+from agent_platform_sdk.interfaces.llm_provider import LLMProvider
+from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_shared.clock import Clock, SystemClock
 
 pytestmark = pytest.mark.unit
@@ -61,10 +69,6 @@ class TestLLMGatewayWiring:
         # implementation is named.
         assert isinstance(gateway, LLMGateway)
 
-    def test_no_provider_is_registered_yet(self, container: ApplicationContainer) -> None:
-        """Milestone 05 registers the first one. Until then the tuple is empty."""
-        assert container.llm_providers() == ()
-
     def test_the_gateway_takes_its_policies_from_configuration(
         self, container: ApplicationContainer, test_settings: PlatformSettings
     ) -> None:
@@ -73,6 +77,87 @@ class TestLLMGatewayWiring:
 
         assert gateway._timeout_policy is test_settings.llm_gateway.timeout  # noqa: SLF001
         assert gateway._retry_policy is test_settings.llm_gateway.retry  # noqa: SLF001
+
+
+class TestProviderRegistration:
+    """Which providers exist is a configuration decision, resolved here."""
+
+    def test_no_provider_is_registered_when_the_mock_is_disabled(
+        self, test_settings: PlatformSettings
+    ) -> None:
+        """The default. Azure AI Foundry becomes the first always-on provider in M05."""
+        assert build_llm_providers(test_settings) == ()
+
+    def test_the_mock_provider_is_registered_when_enabled(
+        self, test_settings: PlatformSettings
+    ) -> None:
+        enabled = test_settings.model_copy(
+            update={"mock_provider": MockProviderSettings(enabled=True)}
+        )
+
+        registered = build_llm_providers(enabled)
+
+        assert len(registered) == 1
+        assert isinstance(registered[0], MockLLMProvider)
+        assert isinstance(registered[0], LLMProvider)
+
+    def test_the_mock_provider_is_refused_in_a_production_like_environment(
+        self, test_settings: PlatformSettings
+    ) -> None:
+        """Second line of defence. Configuration validation already rejects this.
+
+        Belt and braces on purpose: the settings invariant protects a correctly
+        constructed `PlatformSettings`, and this protects the case where one is
+        assembled some other way — a test, a future factory, a migration script.
+        """
+        production_with_mock = test_settings.model_copy(
+            update={
+                "app": test_settings.app.model_copy(update={"environment": Environment.PRODUCTION}),
+                "mock_provider": MockProviderSettings(enabled=True),
+            }
+        )
+
+        assert build_llm_providers(production_with_mock) == ()
+
+
+class TestChatWiring:
+    """The chat service is what the API layer resolves per request."""
+
+    def test_the_chat_service_resolves_with_its_collaborators(
+        self, container: ApplicationContainer
+    ) -> None:
+        service = container.chat_service()
+
+        assert isinstance(service, ChatService)
+        # Depends on the protocols, never on DefaultLLMGateway or a concrete
+        # memory implementation.
+        assert isinstance(service._gateway, LLMGateway)  # noqa: SLF001 - asserting wiring
+        assert isinstance(service._memory, MemoryProvider)  # noqa: SLF001
+
+    def test_memory_is_shared_across_resolutions(self, container: ApplicationContainer) -> None:
+        """A per-request memory provider would lose the conversation every request."""
+        assert container.memory_provider() is container.memory_provider()
+
+    def test_memory_takes_its_bounds_from_configuration(
+        self, container: ApplicationContainer, test_settings: PlatformSettings
+    ) -> None:
+        memory = container.memory_provider()
+
+        assert memory._max_conversations == test_settings.memory.max_conversations  # noqa: SLF001
+        assert (
+            memory._max_messages  # noqa: SLF001
+            == test_settings.memory.max_messages_per_conversation
+        )
+
+    def test_every_registered_component_is_probed_for_health(
+        self, container: ApplicationContainer
+    ) -> None:
+        """`/ready` must report the real state of the system, not just the process."""
+        service = container.health_service()
+
+        probed = {provider.provider_id for provider in service._providers}  # noqa: SLF001
+
+        assert "session-memory" in probed
 
 
 class TestLifetimes:

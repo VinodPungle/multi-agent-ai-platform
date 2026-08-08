@@ -46,6 +46,13 @@ services:
       PLATFORM_LOGGING__RENDERER: console
       PLATFORM_TELEMETRY__ENABLED: 'true'
       PLATFORM_TELEMETRY__CONSOLE_EXPORTER: 'false'
+      # Answers locally so chat works before Azure AI Foundry lands in
+      # Milestone 05. Set here rather than defaulted on, so the unsafe state is
+      # always one somebody chose — configuration validation rejects it outside
+      # development regardless.
+      PLATFORM_MOCK_PROVIDER__ENABLED: 'true'
+      PLATFORM_FEATURES__STREAMING: 'true'
+      PLATFORM_FEATURES__MEMORY: 'true'
     volumes:
       # Source is mounted so edits reload without a rebuild. Read-only: a
       # container must never write into the working tree.
