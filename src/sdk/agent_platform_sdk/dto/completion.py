@@ -1,0 +1,119 @@
+"""Model invocation contracts.
+
+These are the types every :class:`~agent_platform_sdk.interfaces.llm_provider.LLMProvider`
+accepts and returns. Because they are provider-neutral, swapping Azure AI Foundry
+for Anthropic changes no caller.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from agent_platform_sdk.dto.message import Message, ToolCall
+
+__all__ = [
+    "CompletionChunk",
+    "CompletionRequest",
+    "CompletionResponse",
+    "TokenUsage",
+]
+
+
+class TokenUsage(BaseModel):
+    """Token accounting for a single model call."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    prompt_tokens: int = Field(default=0, ge=0, description="Tokens in the assembled prompt.")
+    completion_tokens: int = Field(default=0, ge=0, description="Tokens generated.")
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens billed for the call."""
+        return self.prompt_tokens + self.completion_tokens
+
+
+class CompletionRequest(BaseModel):
+    """A provider-neutral request for a model completion.
+
+    ``model_id`` is resolved by the runtime from the model registry before this
+    object is built. Providers receive an already-resolved identifier and never
+    choose a model themselves.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_id: str = Field(description="Registry identifier of the model to invoke.")
+    messages: tuple[Message, ...] = Field(description="Conversation, oldest message first.")
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature. None defers to the model's registered default.",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description="Cap on generated tokens. None defers to the model's registered default.",
+    )
+    stop_sequences: tuple[str, ...] = Field(
+        default=(),
+        description="Sequences that terminate generation.",
+    )
+    tool_ids: tuple[str, ...] = Field(
+        default=(),
+        description="Tools the model may call, resolved through the tool registry.",
+    )
+
+
+class CompletionResponse(BaseModel):
+    """The result of a non-streaming model completion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message: Message = Field(description="The assistant message produced by the model.")
+    model_id: str = Field(description="Model that actually served the request.")
+    provider_id: str = Field(description="Provider that served the request.")
+    usage: TokenUsage = Field(
+        default_factory=TokenUsage,
+        description="Token accounting. Zeroed when a provider does not report usage.",
+    )
+    estimated_cost: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Cost in USD, computed from registry pricing. Decimal rather than float "
+            "because summing float costs across millions of calls accumulates error."
+        ),
+    )
+    latency_ms: float | None = Field(default=None, ge=0, description="Total call latency.")
+    finish_reason: str | None = Field(
+        default=None,
+        description="Why generation stopped, normalised by the provider adapter.",
+    )
+
+
+class CompletionChunk(BaseModel):
+    """One increment of a streamed completion.
+
+    Streaming is coordinated by the runtime (``architecture.md`` §24), which
+    measures time-to-first-token from the first chunk it observes.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    delta: str = Field(default="", description="Text appended by this chunk.")
+    tool_calls: tuple[ToolCall, ...] = Field(
+        default=(),
+        description="Tool calls completed within this chunk.",
+    )
+    finish_reason: str | None = Field(
+        default=None,
+        description="Set on the final chunk only.",
+    )
+    usage: TokenUsage | None = Field(
+        default=None,
+        description="Usage, when the provider reports it on the terminal chunk.",
+    )

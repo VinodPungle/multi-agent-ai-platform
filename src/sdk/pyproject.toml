@@ -1,0 +1,24 @@
+[project]
+name = "agent-platform-sdk"
+version = "0.1.0"
+description = "Public contract surface for the platform: interfaces, DTOs, events and policies"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary" }
+
+# Pydantic only. The SDK defines *contracts*, never implementations, so it must
+# never depend on a provider SDK, a web framework, or a cloud client library.
+dependencies = [
+    "agent-platform-shared",
+    "pydantic>=2.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_platform_sdk"]
+
+[tool.uv.sources]
+agent-platform-shared = { workspace = true }
