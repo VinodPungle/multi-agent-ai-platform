@@ -369,14 +369,27 @@ check the browser console for a CORS error — the backend allows only the origi
 in `PLATFORM_SERVER__CORS_ORIGINS`. Vite inlines `VITE_*` values at build time,
 so restart the dev server after changing one.
 
-**Frontend container fails with a native module error**
+**`Failed to resolve import "<package>"` in the frontend container, or a native module error**
 
-Host `node_modules` have leaked into the container. Rebuild:
+Both are the same cause: the container's `node_modules` are stale. Compose mounts
+an **anonymous volume** over `/app/node_modules` (see `docker-compose.yml`) so the
+host's Windows- or macOS-built modules cannot shadow the container's Linux-built
+ones. That volume **survives `docker compose up --build`** — Compose reattaches
+the existing one, so a newly added dependency is present in the rebuilt image and
+still invisible at runtime.
+
+The `-v` is the part that matters:
 
 ```bash
-docker compose down -v
+docker compose down -v      # drops the anonymous node_modules volume
 docker compose up --build
 ```
+
+`down` without `-v` reattaches the stale volume and reproduces the error exactly.
+
+**Any time you add a frontend dependency**, that pair of commands is the Compose
+equivalent of `npm install`. Running the frontend directly (`task dev`) needs only
+`npm ci`, because there is no volume in the way.
 
 **`uv sync` fails to find Python 3.12**
 

@@ -94,6 +94,11 @@ services:
       # Anonymous volume shielding the image's Linux-built node_modules from the
       # host's. Without it the bind mount above would shadow them with binaries
       # compiled for the wrong platform.
+      #
+      # It also survives `up --build`: Compose reattaches the existing volume, so
+      # a dependency added to package.json is installed into the new image and
+      # still missing at runtime. After adding one, run `docker compose down -v`
+      # first — see the troubleshooting section of docs/developer-setup.md.
       - /app/node_modules
     depends_on:
       backend:
