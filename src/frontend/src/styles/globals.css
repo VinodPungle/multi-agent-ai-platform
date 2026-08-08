@@ -1,0 +1,95 @@
+/*
+ * Design tokens and global styles.
+ *
+ * Tailwind CSS v4 configures itself in CSS rather than a JavaScript config
+ * file, so the theme lives here.
+ *
+ * Every colour is a token. Components reference `bg-card`, `text-muted-foreground`
+ * and so on — never a literal hex value — which is what keeps light and dark
+ * themes consistent and makes rebranding a single-file change (handbook,
+ * "Design System": follow consistent colours, avoid ad-hoc styling).
+ *
+ * Token names follow the shadcn/ui convention so shadcn components can be added
+ * without modification.
+ */
+
+@import 'tailwindcss';
+
+@theme {
+  --color-background: hsl(0 0% 100%);
+  --color-foreground: hsl(222 47% 11%);
+
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(222 47% 11%);
+
+  --color-muted: hsl(210 40% 96%);
+  --color-muted-foreground: hsl(215 16% 47%);
+
+  --color-border: hsl(214 32% 91%);
+
+  --color-primary: hsl(221 83% 53%);
+  --color-primary-foreground: hsl(0 0% 100%);
+
+  --color-success: hsl(142 71% 35%);
+  --color-warning: hsl(35 92% 38%);
+  --color-danger: hsl(0 72% 46%);
+}
+
+/*
+ * Dark theme.
+ *
+ * Driven by the operating system preference alone in Milestone 01; a user-facing
+ * toggle arrives with Settings. Only token values change — no component needs a
+ * dark-specific rule.
+ */
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-background: hsl(222 47% 8%);
+    --color-foreground: hsl(210 40% 96%);
+
+    --color-card: hsl(222 40% 11%);
+    --color-card-foreground: hsl(210 40% 96%);
+
+    --color-muted: hsl(217 33% 17%);
+    --color-muted-foreground: hsl(215 20% 65%);
+
+    --color-border: hsl(217 33% 20%);
+
+    --color-primary: hsl(217 91% 65%);
+    --color-primary-foreground: hsl(222 47% 11%);
+
+    --color-success: hsl(142 69% 58%);
+    --color-warning: hsl(38 92% 60%);
+    --color-danger: hsl(0 84% 68%);
+  }
+}
+
+html {
+  /* Respects the OS setting for form controls, scrollbars and other UA chrome. */
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Users who ask for reduced motion must actually get it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
