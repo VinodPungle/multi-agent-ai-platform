@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -63,16 +64,31 @@ class FakeClock:
 
 
 @pytest.fixture(autouse=True)
-def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolated_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pytest.TempPathFactory | Path,
+) -> Iterator[None]:
     """Isolate every test from ambient configuration.
 
-    Autouse and non-negotiable. Without it a developer's ``.env`` or an exported
-    ``PLATFORM_*`` variable changes test outcomes, producing failures that
-    reproduce on one machine and not another.
+    Autouse and non-negotiable. Without it a developer's local setup changes test
+    outcomes, producing failures that reproduce on one machine and not another.
+
+    Two sources have to be neutralised, and missing the second one let a real
+    bug ship: settings are read from the process environment **and** from a
+    ``.env`` file resolved relative to the working directory. Clearing the
+    environment alone left the suite reading the repository's own ``.env``, so
+    tests passed on a clean checkout and failed the moment anyone followed the
+    setup guide.
+
+    Running each test in an empty temporary directory removes that file from the
+    search path entirely. A test that wants a ``.env`` writes one and changes
+    directory itself, which makes the dependency explicit.
     """
     for key in list(os.environ):
         if key.startswith("PLATFORM_"):
             monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.chdir(tmp_path)  # type: ignore[arg-type]  # pytest supplies a Path
 
     # `get_settings` memoises. A value cached by an earlier test would otherwise
     # be handed to the next one.

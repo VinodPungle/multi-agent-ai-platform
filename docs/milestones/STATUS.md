@@ -46,7 +46,7 @@ acceptance criterion is verified, not merely implemented.
 Backend    ruff .............. All checks passed
            black ............. 87 files unchanged
            mypy --strict ..... no issues in 87 source files
-           pytest ............ 146 passed, 97% statement coverage
+           pytest ............ 150 passed, 97% statement coverage
 
 Frontend   eslint ............ no problems
            prettier .......... all files formatted
@@ -71,6 +71,21 @@ Containers backend image ..... built; /live, /ready, /health, /api/v1/info all 2
   Answers "what is actually deployed here?" without shelling into a container.
 - **Configurable Compose host ports** — `BACKEND_PORT` / `FRONTEND_PORT`. Added
   after a real port collision during verification.
+
+### Defects found during verification, and fixed
+
+Recorded because each was invisible to the test suite as written, and the gap
+that hid it was worth closing.
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| `pydantic-settings` JSON-decodes collection fields from environment variables before any validator runs, so `PLATFORM_SERVER__CORS_ORIGINS` raised `SettingsError` at startup | Running the Compose stack. Unit tests missed it because they constructed `ServerSettings` directly rather than binding through the environment. | `NoDecode` annotation; two tests that bind through the environment |
+| The dotenv source hands *every* key in `.env` to the model, so `extra="forbid"` rejected the `VITE_*` and port variables that deliberately share the file — the backend refused to start as soon as a developer copied `.env.example` to `.env` | Running the gates after `.env` was created. Never seen in Docker, because `.dockerignore` excludes `.env`. | `_NamespacedDotEnvSource` filters the file to the `PLATFORM_` prefix; four tests write a real `.env` |
+| The test suite was not isolated from the repository's own `.env`, so results depended on whether a developer had created one | Exposed by the fix above | The autouse fixture now also runs each test in an empty temporary directory |
+
+The pattern is consistent: every one hid behind a test that exercised a
+convenient path rather than the real one. Tests now bind through the
+environment and through a file on disk, as production does.
 
 ### Known limitations
 

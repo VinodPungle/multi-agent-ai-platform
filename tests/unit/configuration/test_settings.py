@@ -9,6 +9,9 @@ misconfiguration that is silent in development and damaging in production.
 
 from __future__ import annotations
 
+from pathlib import Path
+from textwrap import dedent
+
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
@@ -261,6 +264,86 @@ class TestEnvironmentVariableBinding:
 
         assert settings.telemetry.azure_monitor_connection_string == secret
         assert secret not in repr(settings.telemetry)
+
+
+class TestSharedDotEnvFile:
+    """One `.env` at the repository root serves backend, frontend and Compose.
+
+    Regression tests. The default dotenv source hands every key in the file to
+    the model, and `extra="forbid"` then rejects the `VITE_*` and port variables
+    that legitimately share it — so the application refused to start the moment
+    a developer followed the setup guide and copied `.env.example` to `.env`.
+
+    The unit suite missed this entirely because it constructs settings from
+    keyword arguments and the environment, never from a file on disk. These
+    tests write a real file.
+    """
+
+    @staticmethod
+    def _write_env_file(directory: Path, contents: str) -> None:
+        (directory / ".env").write_text(dedent(contents).lstrip(), encoding="utf-8")
+
+    def test_variables_belonging_to_other_tools_are_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`.env.example` copied verbatim must start the application."""
+        self._write_env_file(
+            tmp_path,
+            """
+            PLATFORM_APP__ENVIRONMENT=development
+            PLATFORM_SERVER__PORT=8000
+            BACKEND_PORT=18000
+            FRONTEND_PORT=5173
+            VITE_API_BASE_URL=http://localhost:8000
+            VITE_APP_NAME=Multi-Agent AI Platform
+            """,
+        )
+        monkeypatch.chdir(tmp_path)
+
+        settings = PlatformSettings()
+
+        assert settings.server.port == 8000
+        assert settings.app.environment is Environment.DEVELOPMENT
+
+    def test_platform_values_are_read_from_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._write_env_file(
+            tmp_path,
+            """
+            PLATFORM_SERVER__PORT=9100
+            PLATFORM_LOGGING__LEVEL=warning
+            PLATFORM_SERVER__CORS_ORIGINS=http://a.test,http://b.test
+            VITE_APP_NAME=irrelevant
+            """,
+        )
+        monkeypatch.chdir(tmp_path)
+
+        settings = PlatformSettings()
+
+        assert settings.server.port == 9100
+        assert settings.logging.level == "WARNING"
+        assert settings.server.cors_origins == ("http://a.test", "http://b.test")
+
+    def test_a_misspelled_platform_variable_is_still_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Filtering must not weaken typo detection, which is why `extra` stays forbid."""
+        self._write_env_file(tmp_path, "PLATFORM_SERVER__PROT=8080\n")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(PydanticValidationError):
+            PlatformSettings()
+
+    def test_the_process_environment_overrides_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Precedence per architecture.md §71: environment beats the .env file."""
+        self._write_env_file(tmp_path, "PLATFORM_SERVER__PORT=9100\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PLATFORM_SERVER__PORT", "9200")
+
+        assert PlatformSettings().server.port == 9200
 
 
 class TestSettingsCache:

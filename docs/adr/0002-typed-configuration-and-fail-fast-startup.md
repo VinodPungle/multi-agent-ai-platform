@@ -50,6 +50,17 @@ All violations are reported together, so a fix takes one cycle rather than four.
 the application factory; every consumer receives the instance through the
 dependency-injection container. No module reads the environment directly.
 
+**Namespace-filtered `.env`.** One `.env` at the repository root serves the
+backend, the frontend and Docker Compose, so it legitimately contains `VITE_*`,
+`BACKEND_PORT` and `FRONTEND_PORT` alongside `PLATFORM_*`. Unlike the
+process-environment source, `pydantic-settings`' dotenv source hands *every* key
+in the file to the model, which `extra="forbid"` then rejects. A custom
+`_NamespacedDotEnvSource` filters the file to the `PLATFORM_` prefix.
+
+Filtering rather than relaxing `extra` is the point: a misspelled `PLATFORM_*`
+variable remains a startup failure, while a variable belonging to another tool
+is correctly ignored.
+
 ## Alternatives Considered
 
 ### Read `os.environ` at each point of use
@@ -109,8 +120,12 @@ unambiguous and is what `pydantic-settings` supports natively.
 
 - `tests/unit/configuration/test_settings.py` asserts each invariant, including
   that all violations are reported together.
-- An autouse fixture strips `PLATFORM_*` from the environment, so a developer's
-  local `.env` cannot change a test outcome.
+- `TestSharedDotEnvFile` writes a real `.env` on disk and asserts that foreign
+  keys are ignored while a misspelled `PLATFORM_*` key still fails.
+- An autouse fixture strips `PLATFORM_*` from the environment **and** runs each
+  test in an empty temporary directory. Both are required: clearing the
+  environment alone left the suite reading the repository's own `.env`, which is
+  how the dotenv-filtering bug reached a commit.
 - Ruff's `PTH` and `T20` rules and the handbook's review checklist cover direct
   environment and `print()` access in review.
 

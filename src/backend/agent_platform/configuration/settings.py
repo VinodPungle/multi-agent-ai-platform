@@ -21,12 +21,14 @@ an hour earlier.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource, PydanticBaseSettingsSource
 
 __all__ = [
     "AppSettings",
@@ -208,6 +210,36 @@ class FeatureFlagSettings(BaseModel):
         return self.model_dump()
 
 
+class _NamespacedDotEnvSource(DotEnvSettingsSource):
+    """Reads only this application's namespace from a shared ``.env`` file.
+
+    One ``.env`` at the repository root serves the backend, the frontend and
+    Docker Compose, so it legitimately contains ``VITE_*``, ``BACKEND_PORT`` and
+    ``FRONTEND_PORT`` alongside ``PLATFORM_*``. Two files would drift, and a
+    developer would have to remember which one holds what.
+
+    The default dotenv source hands *every* key in the file to the model, unlike
+    the process-environment source, which filters by prefix. Combined with
+    ``extra="forbid"`` that makes the application refuse to start the moment a
+    developer copies ``.env.example`` to ``.env`` — the first thing the setup
+    guide tells them to do.
+
+    Filtering here rather than relaxing ``extra`` keeps the typo detection that
+    ``extra="forbid"`` exists to provide: a misspelled ``PLATFORM_*`` variable is
+    still a startup failure, while a variable belonging to another tool is
+    correctly ignored.
+    """
+
+    def _load_env_vars(self) -> Mapping[str, str | None]:
+        """Return only the keys carrying this settings model's prefix."""
+        prefix = self.env_prefix.lower()
+        return {
+            key: value
+            for key, value in super()._load_env_vars().items()
+            if key.lower().startswith(prefix)
+        }
+
+
 class PlatformSettings(BaseSettings):
     """Root configuration object. Constructed exactly once per process."""
 
@@ -229,6 +261,29 @@ class PlatformSettings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Substitute the namespace-filtering dotenv source.
+
+        Source order is precedence, highest first, and matches the hierarchy in
+        ``architecture.md`` §71: explicit arguments, then the process
+        environment, then the ``.env`` file, then defaults declared on the
+        models. Key Vault is inserted ahead of the dotenv source in Milestone 05.
+        """
+        return (
+            init_settings,
+            env_settings,
+            _NamespacedDotEnvSource(settings_cls),
+            file_secret_settings,
+        )
 
     @model_validator(mode="after")
     def enforce_environment_invariants(self) -> Self:
