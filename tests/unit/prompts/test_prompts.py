@@ -16,7 +16,10 @@ from pathlib import Path
 import pytest
 
 from agent_platform.exceptions.base import ConfigurationError, NotFoundError, ValidationError
-from agent_platform.prompts.file_prompt_provider import FilePromptProvider
+from agent_platform.prompts.file_prompt_provider import (
+    FilePromptProvider,
+    resolve_prompts_directory,
+)
 from agent_platform.prompts.renderer import render_prompt
 from agent_platform_sdk.dto.prompt import PromptAsset, PromptVariable
 from agent_platform_sdk.interfaces.prompt_provider import PromptProvider
@@ -263,3 +266,69 @@ class TestShippedPrompts:
         asset = await provider.get("chat-agent-system")
 
         assert {variable.name for variable in asset.variables} == {"locale"}
+
+
+class TestDirectoryResolution:
+    """Where prompts are found must not depend on how the process was launched.
+
+    A backend started one directory above the repository root loaded nothing,
+    reported healthy, and answered every request with "No prompt registered".
+    The configuration was correct; the working directory was not.
+    """
+
+    def test_an_absolute_path_is_used_exactly(self, tmp_path: Path) -> None:
+        """Explicit configuration wins, including when it points somewhere empty.
+
+        Silently substituting a populated directory for a deliberately chosen
+        empty one would hide a real misconfiguration.
+        """
+        empty = tmp_path / "somewhere-empty"
+        empty.mkdir()
+
+        assert resolve_prompts_directory(empty) == empty
+
+    def test_an_absolute_path_that_does_not_exist_is_still_returned(self, tmp_path: Path) -> None:
+        missing = tmp_path / "nope"
+
+        assert resolve_prompts_directory(missing) == missing
+
+    def test_a_relative_path_resolves_against_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The container case: WORKDIR /app with /app/prompts."""
+        (tmp_path / "prompts").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        assert resolve_prompts_directory("prompts") == (tmp_path / "prompts").resolve()
+
+    def test_a_relative_path_falls_back_to_the_repository_copy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bug this exists to prevent: launched from the wrong directory."""
+        monkeypatch.chdir(tmp_path)  # no `prompts` here
+
+        resolved = resolve_prompts_directory("prompts")
+
+        assert resolved.is_dir()
+        assert (resolved / "agents" / "chat" / "system.md").is_file()
+
+    def test_the_working_directory_wins_over_the_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fallback rescues an accident; it never overrides a real directory."""
+        local = tmp_path / "prompts"
+        local.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        assert resolve_prompts_directory("prompts") == local.resolve()
+
+    def test_an_unfindable_relative_path_comes_back_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative path in an error message is useless without its base."""
+        monkeypatch.chdir(tmp_path)
+
+        resolved = resolve_prompts_directory("no-such-directory-anywhere")
+
+        assert resolved.is_absolute()
+        assert not resolved.exists()

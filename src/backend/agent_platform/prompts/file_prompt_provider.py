@@ -32,12 +32,82 @@ from agent_platform_sdk.contracts.health import ComponentHealth
 from agent_platform_sdk.dto.prompt import PromptAsset
 from agent_platform_sdk.types.enums import Capability, HealthStatus
 
-__all__ = ["FilePromptProvider"]
+__all__ = ["FilePromptProvider", "resolve_prompts_directory"]
 
 _logger = get_logger(__name__)
 
 #: Separates YAML front matter from the template body.
 _FRONT_MATTER_DELIMITER = "---"
+
+#: How far above this module to look for a configured relative directory.
+#: Five levels reaches the repository root from
+#: ``src/backend/agent_platform/prompts/`` and stops there, so the search can
+#: never wander into a same-named directory outside the project.
+_ANCESTOR_SEARCH_LIMIT = 5
+
+
+def resolve_prompts_directory(configured: str | Path) -> Path:
+    """Turn a configured prompts path into an absolute one.
+
+    A relative path is resolved against the *working directory*, which is not a
+    property of the deployment — it is a property of however the process was
+    launched. A backend started from one directory up loaded no prompts, showed
+    a green dashboard, and answered every request with "No prompt registered".
+    Nothing in the configuration was wrong.
+
+    Resolution order:
+
+    1. An absolute path is used exactly as given. Explicit configuration always
+       wins, including when it points somewhere empty — that is a real
+       misconfiguration and must stay visible.
+    2. A relative path that exists relative to the working directory is used.
+       This is the container case: ``WORKDIR /app`` with ``/app/prompts``.
+    3. Otherwise the same relative path is looked for above this module, which
+       finds the repository's own ``prompts/`` regardless of where the process
+       started.
+
+    The fallback only runs when the configured path does not exist, so it can
+    never override a deliberate choice — it only rescues a launch-location
+    accident.
+
+    Args:
+        configured: The path as configured, absolute or relative.
+
+    Returns:
+        An absolute path. It may still not exist; the caller reports that as
+        unhealthy rather than guessing further.
+    """
+    path = Path(configured)
+
+    if path.is_absolute():
+        return path
+
+    if path.is_dir():
+        return path.resolve()
+
+    for ancestor in list(Path(__file__).resolve().parents)[:_ANCESTOR_SEARCH_LIMIT]:
+        candidate = ancestor / path
+        # A directory holding `__init__.py` is a Python package, not an asset
+        # directory. This is not hypothetical: the module implementing this
+        # function lives in a package called `prompts`, so an unguarded search
+        # for a directory named `prompts` matches the source tree first and
+        # loads nothing.
+        if candidate.is_dir() and not (candidate / "__init__.py").exists():
+            _logger.info(
+                "prompts.directory_resolved_from_package",
+                configured=str(path),
+                resolved=str(candidate),
+                working_directory=str(Path.cwd()),
+                detail=(
+                    "The configured relative path does not exist in the working "
+                    "directory. Using the copy found alongside the package."
+                ),
+            )
+            return candidate
+
+    # Resolved for the error message: a relative path in a log line is useless
+    # without knowing what it was relative to.
+    return path.resolve()
 
 
 class FilePromptProvider:

@@ -13,8 +13,6 @@ is covered directly by `tests/unit/dependencies/test_container.py`.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from dependency_injector import containers, providers
 
 from agent_platform.agents.chat_agent import ChatAgent
@@ -25,7 +23,10 @@ from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
-from agent_platform.prompts.file_prompt_provider import FilePromptProvider
+from agent_platform.prompts.file_prompt_provider import (
+    FilePromptProvider,
+    resolve_prompts_directory,
+)
 from agent_platform.providers.azure_foundry.azure_foundry_provider import (
     AzureFoundryProvider,
 )
@@ -270,7 +271,11 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: Versioned prompt assets, loaded from disk once during startup.
     prompt_provider = providers.Singleton(
         FilePromptProvider,
-        root=providers.Callable(Path, settings.provided.chat.prompts_directory),
+        # Resolved rather than wrapped in `Path`: a relative value would
+        # otherwise depend on the directory the process was launched from.
+        root=providers.Callable(
+            resolve_prompts_directory, settings.provided.chat.prompts_directory
+        ),
     )
 
     #: Where search results come from. The interface is what the tool depends
