@@ -167,40 +167,56 @@ jobs:
       # vulnerable package that arrived in a base image, which is where most
       # container CVEs actually come from.
 
-      - name: Scan the backend image
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: agent-platform-backend:${{ inputs.image-tag }}
-          format: sarif
-          output: trivy-backend.sarif
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+      - name: Scan both images
+        # Scanned from an exported tar rather than the daemon, so Trivy runs in
+        # its own container without a socket mount. The published image is a
+        # fixed artefact; `trivy-action` fetches an install script from a moving
+        # branch at run time, and that script failed on the runner.
+        run: |
+          set -eu
+          mkdir -p scan
+          for service in backend frontend; do
+            docker save "agent-platform-${service}:${{ inputs.image-tag }}" \
+              --output "scan/${service}.tar"
 
-      - name: Scan the frontend image
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: agent-platform-frontend:${{ inputs.image-tag }}
-          format: sarif
-          output: trivy-frontend.sarif
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+            docker run --rm \
+              --volume "${PWD}/scan:/scan" \
+              ${TRIVY_IMAGE} image \
+                --input "/scan/${service}.tar" \
+                --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+                --format sarif \
+                --output "/scan/trivy-${service}.sarif" \
+                --no-progress
+          done
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.65.0
 
       - name: Publish image scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: .
+          sarif_file: scan
           category: container-images
 
       - name: Fail on high or critical image findings
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: agent-platform-backend:${{ inputs.image-tag }}
-          format: table
-          severity: ${{ inputs.fail-on-severity }}
-          # Only findings with a fix available. A CVE nobody can remediate stops
-          # every build indefinitely and teaches people to bypass the gate,
-          # which costs more security than it buys.
-          ignore-unfixed: true
-          exit-code: '1'
+        # Only findings with a fix available. A CVE nobody can remediate stops
+        # every build indefinitely and teaches people to bypass the gate, which
+        # costs more security than it buys.
+        run: |
+          set -eu
+          for service in backend frontend; do
+            echo "Gating ${service}"
+            docker run --rm \
+              --volume "${PWD}/scan:/scan" \
+              ${TRIVY_IMAGE} image \
+                --input "/scan/${service}.tar" \
+                --severity ${{ inputs.fail-on-severity }} \
+                --ignore-unfixed \
+                --exit-code 1 \
+                --no-progress
+          done
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.65.0
 
       # --- Publish ----------------------------------------------------------
       # Retagging what was verified rather than rebuilding. The artefact that
