@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_platform_sdk.dto.completion import TokenUsage
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.dto.prompt import PromptAsset
+from agent_platform_sdk.dto.tool import ToolDescriptor
 
 __all__ = ["AgentRequest", "AgentResult"]
 
@@ -65,6 +66,14 @@ class AgentRequest(BaseModel):
             "assistant's tool request, then each tool's result. Separate from "
             "`history` because ordering matters — they belong after the user's "
             "message, and history belongs before it. Empty on a first call."
+        ),
+    )
+    tools: tuple[ToolDescriptor, ...] = Field(
+        default=(),
+        description=(
+            "Tools this turn may call, with their schemas. Supplied by the "
+            "workflow layer from the tool registry; the agent passes them "
+            "through to the model request without interpreting them."
         ),
     )
     model_id: str = Field(description="Model the runtime selected for this turn.")

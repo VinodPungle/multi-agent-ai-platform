@@ -187,8 +187,29 @@ class MockLLMProvider:
         Whitespace is attached to the *preceding* word so that concatenating
         every delta reproduces the answer exactly. Consumers rely on that — the
         frontend appends deltas directly to what it has already rendered.
+
+        Tool calls are streamed too, on the terminal chunk, matching what
+        ``generate`` does for the same request. A mock that requested tools only
+        on the non-streaming path would have made the streaming tool loop
+        untestable offline — and it is precisely because the mock never streamed
+        a tool call that the streaming path went so long without one.
         """
         del context
+
+        tool_call = self._maybe_tool_call(request)
+        if tool_call is not None:
+            # No prose on a tool turn, matching `generate`. The terminal chunk
+            # carries the request; the loop runs the tool and streams again.
+            yield CompletionChunk(
+                delta="",
+                tool_calls=(tool_call,),
+                finish_reason="tool_calls",
+                usage=TokenUsage(
+                    prompt_tokens=self._estimate_tokens(self._prompt_text(request)),
+                    completion_tokens=8,
+                ),
+            )
+            return
 
         content = self._compose_answer(request)
         words = content.split(" ")

@@ -219,6 +219,11 @@ class TestCommonContractIsOpenAIShaped:
             "max_output_tokens",
             "stop_sequences",
             "tool_ids",
+            # Declarations, not just ids. `tools` is the OpenAI-shaped field an
+            # adapter maps straight through; `tool_ids` alone told a model that
+            # a tool existed without saying what it took, which meant it either
+            # never called it or called it with nothing.
+            "tools",
             "response_format",
             "metadata",
         }

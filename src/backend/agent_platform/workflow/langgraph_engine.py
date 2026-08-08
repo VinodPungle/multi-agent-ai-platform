@@ -46,7 +46,7 @@ from agent_platform.exceptions.base import PlatformError, WorkflowError
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform.tools.tool_executor import ToolExecutor
-from agent_platform.workflow.tool_loop import run_tool_loop
+from agent_platform.workflow.tool_loop import run_tool_loop, stream_tool_loop
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import CompletionChunk
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
@@ -155,11 +155,15 @@ class LangGraphWorkflowEngine:
         request: AgentRequest,
         context: ExecutionContext,
     ) -> AsyncIterator[CompletionChunk]:
-        """Stream the agent's output.
+        """Stream the agent's output, running any tools it requests.
 
-        Bypasses the graph deliberately — see the module docstring. Returns the
-        agent's iterator rather than wrapping it, so ``aclose()`` still reaches
-        the agent and cancelling a stream releases the provider connection.
+        Bypasses the graph deliberately — see the module docstring — but not the
+        tool loop. Sharing :func:`stream_tool_loop` with the direct engine keeps
+        the two engines' streaming behaviour identical, which is the whole point
+        of having a second implementation.
+
+        The loop closes the agent's iterator in a ``finally``, so cancelling a
+        stream still releases the provider connection.
         """
         _logger.debug(
             "workflow.stream_direct",
@@ -167,7 +171,7 @@ class LangGraphWorkflowEngine:
             agent_id=agent.descriptor.agent_id,
             detail="Token streaming bypasses the graph; LangGraph streams state, not tokens.",
         )
-        return agent.stream(request, context)
+        return stream_tool_loop(agent, request, context, self._tool_executor)
 
     @staticmethod
     def _compile(

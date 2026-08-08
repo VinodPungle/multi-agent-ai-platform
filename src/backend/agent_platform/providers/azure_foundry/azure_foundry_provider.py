@@ -34,13 +34,16 @@ Scale-to-zero
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 from azure.ai.inference.aio import ChatCompletionsClient
 from azure.ai.inference.models import (
     AssistantMessage,
+    ChatCompletionsToolCall,
     ChatCompletionsToolDefinition,
+    FunctionCall,
     FunctionDefinition,
     SystemMessage,
     ToolMessage,
@@ -76,6 +79,20 @@ _logger = get_logger(__name__)
 #: Tokens are billed per million. Pricing is configuration, never hardcoded:
 #: rates change, differ by region, and are negotiated per customer.
 _TOKENS_PER_PRICING_UNIT = Decimal(1_000_000)
+
+
+@dataclass
+class _PartialToolCall:
+    """A tool call being assembled from streamed fragments.
+
+    Mutable and private on purpose: it exists only between the first fragment
+    and the terminal chunk, and never leaves this module. The immutable
+    :class:`ToolCall` is what the rest of the platform sees.
+    """
+
+    call_id: str
+    name: str = ""
+    arguments: str = ""
 
 
 class AzureFoundryProvider:
@@ -323,6 +340,10 @@ class AzureFoundryProvider:
 
         usage = TokenUsage()
         finish_reason: str | None = None
+        # Insertion-ordered, so the calls reach the model in the order it asked
+        # for them. Fragments arrive across many updates and are assembled here.
+        pending_calls: dict[str, _PartialToolCall] = {}
+        last_call_id: str | None = None
 
         try:
             async for update in updates:
@@ -339,6 +360,9 @@ class AzureFoundryProvider:
                     finish_reason = self._to_finish_reason(choice.finish_reason)
 
                 delta = getattr(choice, "delta", None)
+                if delta is not None:
+                    last_call_id = self._accumulate_tool_calls(delta, pending_calls, last_call_id)
+
                 content = getattr(delta, "content", None) if delta else None
                 if content:
                     yield CompletionChunk(delta=content)
@@ -348,11 +372,35 @@ class AzureFoundryProvider:
             # The SDK's streaming response holds an open HTTP connection.
             # Abandoning it — which is what "stop generating" does — leaks that
             # connection unless it is closed here.
-            close = getattr(updates, "close", None)
-            if close is not None:
-                await close()
+            #
+            # `aclose` first, and it is not a stylistic preference: the SDK's
+            # `AsyncStreamingChatCompletions` defines only `aclose`. This looked
+            # for `close`, found nothing, and silently closed nothing on every
+            # stream. The test passed because the fake defined `close()` — a
+            # double shaped to the code instead of to the thing it stands for.
+            for name in ("aclose", "close"):
+                closer = getattr(updates, name, None)
+                if closer is not None:
+                    await closer()
+                    break
 
-        yield CompletionChunk(delta="", finish_reason=finish_reason or "stop", usage=usage)
+        tool_calls = tuple(
+            ToolCall(call_id=partial.call_id, tool_id=partial.name, arguments=partial.arguments)
+            for partial in pending_calls.values()
+            # A fragment that never carried a function name is not a call the
+            # runtime can dispatch. Emitting it would fail tool resolution with
+            # an empty id rather than saying the stream was incomplete.
+            if partial.name
+        )
+
+        yield CompletionChunk(
+            delta="",
+            tool_calls=tool_calls,
+            # `tool_calls` is the honest reason when the model asked for tools:
+            # some deployments report `stop` on the terminal update regardless.
+            finish_reason=("tool_calls" if tool_calls else finish_reason or "stop"),
+            usage=usage,
+        )
 
     async def count_tokens(self, request: CompletionRequest) -> TokenUsage:
         """Estimate prompt tokens.
@@ -458,7 +506,25 @@ class AzureFoundryProvider:
             if message.role is MessageRole.USER:
                 messages.append(UserMessage(content=message.content))
             elif message.role is MessageRole.ASSISTANT:
-                messages.append(AssistantMessage(content=message.content))
+                # Tool calls must survive the round trip. A tool result is only
+                # valid if the transcript contains the assistant turn that asked
+                # for it: dropping them here left a `ToolMessage` answering a
+                # question nobody had asked, and the service rejected the whole
+                # conversation with an HTTP 400. The tool had already run by
+                # then, so the cost was paid and the answer thrown away.
+                messages.append(
+                    AssistantMessage(
+                        content=message.content,
+                        tool_calls=[
+                            ChatCompletionsToolCall(
+                                id=call.call_id,
+                                function=FunctionCall(name=call.tool_id, arguments=call.arguments),
+                            )
+                            for call in message.tool_calls
+                        ]
+                        or None,
+                    )
+                )
             elif message.role is MessageRole.TOOL:
                 # `tool_call_id` is what pairs a result with the call that asked
                 # for it. Without it the service rejects the conversation.
@@ -481,12 +547,39 @@ class AzureFoundryProvider:
         Returns ``None`` when there is nothing to send, because an empty list is
         not the same as absent to the service.
         """
-        if not request.tool_ids or not self._supports_tools:
+        if not self._supports_tools:
             return None
 
-        # A minimal declaration: the id and a description pointing at the
-        # platform. Full schemas arrive when `CompletionRequest` carries tool
-        # descriptors rather than ids — see the milestone record.
+        if request.tools:
+            return [
+                ChatCompletionsToolDefinition(
+                    function=FunctionDefinition(
+                        name=descriptor.tool_id,
+                        description=descriptor.description,
+                        parameters=dict(descriptor.input_schema),
+                    )
+                )
+                for descriptor in request.tools
+            ]
+
+        if not request.tool_ids:
+            return None
+
+        # Ids without declarations. Kept as a fallback for a caller that has not
+        # resolved descriptors, but it is close to useless and says so: a model
+        # told only that `internet-search` exists, with no parameters, either
+        # never calls it or calls it with nothing and the invocation fails
+        # validation. Some deployments reject an empty schema outright with an
+        # HTTP 400, which is how this was found.
+        _logger.warning(
+            "provider.tools_declared_without_schemas",
+            provider_id=self._provider_id,
+            tool_ids=list(request.tool_ids),
+            detail=(
+                "Tool ids arrived without descriptors. The model cannot be told "
+                "what arguments these tools take."
+            ),
+        )
         return [
             ChatCompletionsToolDefinition(
                 function=FunctionDefinition(
@@ -520,6 +613,48 @@ class AzureFoundryProvider:
             )
 
         return tuple(converted)
+
+    @staticmethod
+    def _accumulate_tool_calls(
+        delta: Any,  # noqa: ANN401 - SDK type
+        pending: dict[str, _PartialToolCall],
+        last_call_id: str | None,
+    ) -> str | None:
+        """Fold one update's tool-call fragments into ``pending``.
+
+        A streamed tool call does not arrive whole. The first fragment carries
+        the id and function name; the arguments follow as a series of string
+        pieces that mean nothing until concatenated — a JSON object split
+        mid-token. Assembling them is the provider's job, because it is the only
+        layer that knows this wire format.
+
+        Fragments after the first often omit the id, identifying their call only
+        by position, so an id-less fragment continues the call most recently
+        seen. Guessing wrong here concatenates two calls' arguments into one
+        unparseable string, which is why the id is preferred whenever present.
+
+        Returns:
+            The call id these fragments belonged to, to continue from next time.
+        """
+        for update in getattr(delta, "tool_calls", None) or []:
+            call_id = str(getattr(update, "id", "") or "") or last_call_id
+            if call_id is None:
+                continue
+
+            partial = pending.setdefault(call_id, _PartialToolCall(call_id=call_id))
+
+            function = getattr(update, "function", None)
+            if function is not None:
+                name = getattr(function, "name", None)
+                if name:
+                    partial.name = str(name)
+                arguments = getattr(function, "arguments", None)
+                if arguments:
+                    partial.arguments += str(arguments)
+
+            last_call_id = call_id
+
+        return last_call_id
 
     @staticmethod
     def _to_finish_reason(reason: Any) -> str | None:  # noqa: ANN401 - SDK enum

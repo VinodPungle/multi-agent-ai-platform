@@ -96,14 +96,42 @@ class _Completion:
         self.usage = usage or _Usage(10, 5)
 
 
+class _StreamFunction:
+    def __init__(self, name: str | None = None, arguments: str | None = None) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _StreamToolCall:
+    """One fragment of a streamed tool call.
+
+    An empty ``id`` is not an oversight: providers identify later fragments by
+    position rather than repeating the id, and the provider has to cope.
+    """
+
+    def __init__(
+        self, call_id: str = "", name: str | None = None, arguments: str | None = None
+    ) -> None:
+        self.id = call_id
+        self.function = _StreamFunction(name, arguments)
+
+
 class _Delta:
-    def __init__(self, content: str | None) -> None:
+    def __init__(
+        self, content: str | None, tool_calls: list[_StreamToolCall] | None = None
+    ) -> None:
         self.content = content
+        self.tool_calls = tool_calls or []
 
 
 class _StreamChoice:
-    def __init__(self, content: str | None, finish_reason: str | None = None) -> None:
-        self.delta = _Delta(content)
+    def __init__(
+        self,
+        content: str | None,
+        finish_reason: str | None = None,
+        tool_calls: list[_StreamToolCall] | None = None,
+    ) -> None:
+        self.delta = _Delta(content, tool_calls)
         self.finish_reason = finish_reason
 
 
@@ -113,13 +141,21 @@ class _StreamUpdate:
         content: str | None = None,
         finish_reason: str | None = None,
         usage: _Usage | None = None,
+        tool_calls: list[_StreamToolCall] | None = None,
     ) -> None:
-        self.choices = [_StreamChoice(content, finish_reason)]
+        self.choices = [_StreamChoice(content, finish_reason, tool_calls)]
         self.usage = usage
 
 
 class _Stream:
-    """An async iterator that records whether it was closed."""
+    """An async iterator that records whether it was closed.
+
+    Exposes `aclose` and *not* `close`, because that is what the SDK's
+    `AsyncStreamingChatCompletions` exposes. The earlier double defined `close`,
+    which the provider dutifully looked for and found — so the test passed while
+    the real connection was never closed at all. A double shaped to the code
+    proves the code matches the double.
+    """
 
     def __init__(self, updates: list[_StreamUpdate]) -> None:
         self._updates = updates
@@ -133,7 +169,7 @@ class _Stream:
             raise StopAsyncIteration
         return self._updates.pop(0)
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         self.closed = True
 
 
@@ -707,3 +743,113 @@ class TestFinishReasonNeutrality:
         response = await provider.generate(a_request(), CONTEXT)
 
         assert response.finish_reason is None
+
+
+class TestStreamedToolCalls:
+    """Assembling a tool call from streamed fragments.
+
+    A streamed tool call does not arrive whole: the id and name come first, then
+    the arguments as a series of pieces that are meaningless until concatenated
+    — a JSON object split mid-token. Getting this wrong produces arguments that
+    fail to parse, which the model then sees as its own mistake.
+
+    This is what stood between the chat UI and internet search: the provider
+    dropped these fragments entirely, so a streamed tool call reached the
+    workflow layer as an empty answer.
+    """
+
+    async def test_fragments_are_assembled_into_one_call(self) -> None:
+        stream = _Stream(
+            [
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", "search", '{"q')]),
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", None, 'uery": ')]),
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", None, '"paris"}')]),
+                _StreamUpdate(finish_reason="tool_calls"),
+            ]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        calls = chunks[-1].tool_calls
+        assert len(calls) == 1
+        assert calls[0].tool_id == "search"
+        assert calls[0].arguments == '{"query": "paris"}'
+
+    async def test_a_fragment_without_an_id_continues_the_previous_call(self) -> None:
+        """Providers identify later fragments by position, not by repeating the id.
+
+        Guessing wrong here concatenates two calls' arguments into one
+        unparseable string.
+        """
+        stream = _Stream(
+            [
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", "search", "{")]),
+                _StreamUpdate(tool_calls=[_StreamToolCall("", None, "}")]),
+                _StreamUpdate(finish_reason="tool_calls"),
+            ]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        assert chunks[-1].tool_calls[0].arguments == "{}"
+
+    async def test_two_calls_stay_separate(self) -> None:
+        stream = _Stream(
+            [
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", "search", '{"a": 1}')]),
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-2", "lookup", '{"b": 2}')]),
+                _StreamUpdate(finish_reason="tool_calls"),
+            ]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        calls = chunks[-1].tool_calls
+        assert [call.tool_id for call in calls] == ["search", "lookup"]
+        assert [call.arguments for call in calls] == ['{"a": 1}', '{"b": 2}']
+
+    async def test_a_fragment_that_never_named_a_function_is_dropped(self) -> None:
+        """A call with no tool id cannot be dispatched; emitting it fails obscurely."""
+        stream = _Stream(
+            [
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", None, "{}")]),
+                _StreamUpdate(finish_reason="tool_calls"),
+            ]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        assert chunks[-1].tool_calls == ()
+
+    async def test_the_finish_reason_says_tool_calls(self) -> None:
+        """Some deployments report `stop` on the terminal update regardless."""
+        stream = _Stream(
+            [
+                _StreamUpdate(tool_calls=[_StreamToolCall("call-1", "search", "{}")]),
+                _StreamUpdate(finish_reason="stop"),
+            ]
+        )
+        provider = build_provider(FakeClient(stream=stream))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        assert chunks[-1].finish_reason == "tool_calls"
+
+    async def test_a_text_stream_carries_no_tool_calls(self) -> None:
+        """The common path must not acquire phantom calls."""
+        provider = build_provider(FakeClient(stream=_Stream([_StreamUpdate("hello", "stop")])))
+        await provider.initialize()
+
+        chunks = [chunk async for chunk in provider.stream(a_request(), CONTEXT)]
+
+        assert chunks[-1].tool_calls == ()
+        assert chunks[-1].finish_reason == "stop"

@@ -135,5 +135,8 @@ class ChatAgent:
                 else self._descriptor.max_output_tokens
             ),
             tool_ids=self._descriptor.tool_ids,
+            # Declarations, not just names: without the schema the model
+            # is told a tool exists but not how to call it.
+            tools=request.tools,
             metadata={"agent_id": self._descriptor.agent_id},
         )

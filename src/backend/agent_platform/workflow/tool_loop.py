@@ -23,17 +23,19 @@ Where budget enforcement finally became real
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncGenerator
 
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_sdk.dto.completion import CompletionChunk, TokenUsage
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
 from agent_platform_sdk.dto.message import Message, ToolCall
-from agent_platform_sdk.dto.tool import ToolInvocation, ToolResult
+from agent_platform_sdk.dto.tool import ToolDescriptor, ToolInvocation, ToolResult
 from agent_platform_sdk.interfaces.agent import Agent
 from agent_platform_sdk.types.enums import MessageRole
 
-__all__ = ["DEFAULT_MAX_ITERATIONS", "run_tool_loop"]
+__all__ = ["DEFAULT_MAX_ITERATIONS", "run_tool_loop", "stream_tool_loop"]
 
 _logger = get_logger(__name__)
 
@@ -75,6 +77,7 @@ async def run_tool_loop(
     budget = agent.descriptor.budget
     max_iterations = budget.max_model_calls or DEFAULT_MAX_ITERATIONS
     max_tool_calls = budget.max_tool_invocations
+    declarations = _declarations(executor, permitted)
 
     exchange: tuple[Message, ...] = ()
     model_calls = 0
@@ -83,7 +86,8 @@ async def run_tool_loop(
 
     while model_calls < max_iterations:
         result = await agent.execute(
-            request.model_copy(update={"tool_exchange": exchange}), context
+            request.model_copy(update={"tool_exchange": exchange, "tools": declarations}),
+            context,
         )
         model_calls += 1
 
@@ -169,6 +173,189 @@ async def run_tool_loop(
 
     return result.model_copy(
         update={"model_calls": model_calls, "tool_invocations": tool_invocations}
+    )
+
+
+async def stream_tool_loop(
+    agent: Agent,
+    request: AgentRequest,
+    context: ExecutionContext,
+    executor: ToolExecutor | None,
+) -> AsyncGenerator[CompletionChunk, None]:
+    """Stream ``agent``'s answer, running any tools it asks for on the way.
+
+    The streaming counterpart of :func:`run_tool_loop`, and the reason the chat
+    UI can search. Until this existed the streaming path handed the agent's
+    chunks straight through, so the endpoint the browser uses — the only one it
+    uses — could never invoke a tool. The non-streaming endpoint could. Users
+    saw a platform that had search and did not use it.
+
+    How a tool turn looks on the wire
+        The model's first stream carries tool calls and no prose, so nothing is
+        forwarded. The tools run, their results join the exchange, and the
+        second stream carries the answer, which is forwarded token by token.
+        The consumer sees one uninterrupted answer and never learns there were
+        two model calls.
+
+    Why the terminal chunk is held back
+        Whether tools were requested is only known once the stream ends. A
+        terminal chunk forwarded eagerly would tell the consumer the turn was
+        complete while a tool call was still pending, ending the answer at an
+        empty string. So it is buffered, and released only when the model
+        finishes without asking for anything more.
+
+    Usage accumulates across iterations. A per-iteration count would under-report
+    a tool turn's real cost by however many calls it took.
+    """
+    permitted = agent.descriptor.tool_ids
+
+    if executor is None or not permitted:
+        # No tools in play: one stream, forwarded as-is.
+        #
+        # The inner iterator is closed explicitly. Delegating with `async for`
+        # alone does *not* propagate `aclose()` to it — closing this generator
+        # raises GeneratorExit at the `yield` and leaves the agent's generator
+        # suspended, holding an open provider connection until the garbage
+        # collector happens to reach it. "Stop generating" is exactly that path.
+        stream = agent.stream(request, context)
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+        return
+
+    budget = agent.descriptor.budget
+    max_iterations = budget.max_model_calls or DEFAULT_MAX_ITERATIONS
+    max_tool_calls = budget.max_tool_invocations
+    declarations = _declarations(executor, permitted)
+
+    exchange: tuple[Message, ...] = ()
+    model_calls = 0
+    tool_invocations = 0
+    total_usage = TokenUsage()
+
+    while model_calls < max_iterations:
+        calls: list[ToolCall] = []
+        terminal: CompletionChunk | None = None
+        text: list[str] = []
+
+        stream = agent.stream(
+            request.model_copy(update={"tool_exchange": exchange, "tools": declarations}),
+            context,
+        )
+        try:
+            async for chunk in stream:
+                if chunk.tool_calls:
+                    calls.extend(chunk.tool_calls)
+
+                if chunk.finish_reason is not None or chunk.usage is not None:
+                    terminal = chunk
+                    continue
+
+                if chunk.delta:
+                    text.append(chunk.delta)
+                    yield chunk
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+
+        model_calls += 1
+
+        if terminal is not None and terminal.usage is not None:
+            total_usage = TokenUsage(
+                prompt_tokens=total_usage.prompt_tokens + terminal.usage.prompt_tokens,
+                completion_tokens=total_usage.completion_tokens + terminal.usage.completion_tokens,
+            )
+
+        if not calls:
+            yield CompletionChunk(
+                delta="",
+                finish_reason=(terminal.finish_reason if terminal else None) or "stop",
+                usage=total_usage,
+            )
+            return
+
+        if max_tool_calls is not None and tool_invocations + len(calls) > max_tool_calls:
+            exchange = (
+                *exchange,
+                _assistant_request(text, calls),
+                *(
+                    _tool_message(
+                        call,
+                        ToolResult(
+                            tool_id=call.tool_id,
+                            call_id=call.call_id,
+                            succeeded=False,
+                            error_message=(
+                                "This turn's tool budget is exhausted. "
+                                "Answer with the information you already have."
+                            ),
+                        ),
+                    )
+                    for call in calls
+                ),
+            )
+            continue
+
+        results = [await _invoke(executor, call, context, permitted) for call in calls]
+        tool_invocations += len(results)
+
+        exchange = (
+            *exchange,
+            _assistant_request(text, calls),
+            *(
+                _tool_message(call, tool_result)
+                for call, tool_result in zip(calls, results, strict=True)
+            ),
+        )
+
+    # The ceiling was reached with the model still asking for tools. Saying so
+    # beats the alternative, which is an answer that simply stops.
+    _logger.warning(
+        "runtime.stream_tool_loop_exhausted",
+        agent_id=agent.descriptor.agent_id,
+        model_calls=model_calls,
+        limit=max_iterations,
+        **context.to_log_fields(),
+    )
+    yield CompletionChunk(
+        delta=(
+            "I was unable to finish this request within the allowed number of "
+            "tool calls. Please try narrowing the question."
+        ),
+    )
+    yield CompletionChunk(delta="", finish_reason="tool_limit", usage=total_usage)
+
+
+def _declarations(executor: ToolExecutor, permitted: tuple[str, ...]) -> tuple[ToolDescriptor, ...]:
+    """Resolve the declarations for the tools this agent may call.
+
+    The workflow layer owns this lookup because it owns the registry. A provider
+    that resolved descriptors itself would couple inference to tooling, which is
+    why the provider is handed finished declarations and never a registry.
+
+    Only registered, available tools are returned — `available_tools` already
+    skips the rest — so a model is never told about a tool this deployment
+    cannot actually run.
+    """
+    return tuple(tool.descriptor for tool in executor.available_tools(permitted))
+
+
+def _assistant_request(text: list[str], calls: list[ToolCall]) -> Message:
+    """Rebuild the assistant turn that asked for these tools.
+
+    The transcript has to contain the request the results answer. Any prose
+    streamed alongside the calls is kept: a model that explained itself before
+    calling a tool and then finds that explanation missing tends to repeat it.
+    """
+    return Message(
+        role=MessageRole.ASSISTANT,
+        content="".join(text),
+        tool_calls=tuple(calls),
     )
 
 

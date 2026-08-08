@@ -485,12 +485,9 @@ Live   real search ........... "search for the eiffel tower" returned three
 
 ### Known limitations
 
-1. **Streaming does not use tools.** `CompletionChunk` cannot carry a tool call,
-   so the streaming endpoint — the one the frontend uses — streams the agent
-   directly and never calls a tool. The non-streaming endpoint has the full
-   capability. This is the milestone's most significant gap, and closing it means
-   extending the chunk contract once a real provider's streaming tool protocol is
-   known.
+1. ~~**Streaming does not use tools.**~~ **Resolved after Milestone 05** — and
+   the stated reason was wrong. `CompletionChunk` already had a `tool_calls`
+   field; no provider populated it. See the Milestone 05 follow-up below.
 2. **The LangGraph graph still has one node**, with the loop inside it rather
    than as `agent → tools → agent` edges.
 3. **Tool arguments are hand-validated**, so the declared JSON Schema and the
@@ -652,9 +649,7 @@ Live   authentication ........ DefaultAzureCredential, no API key
    checks only; real usage comes back on every response.
 5. **`supports_tools` is a configuration claim.** Setting it for a model that
    ignores tool definitions routes tool work into silence.
-6. **Streaming still does not use tools** — carried over from Milestone 04, and
-   unchanged here. `CompletionChunk` cannot carry a tool call, so the frontend's
-   streaming endpoint never invokes one.
+6. ~~**Streaming still does not use tools**~~ — fixed in the follow-up below.
 7. **No automated enforcement that Azure types stay contained.** The
    `finish_reason` leak proves a review checklist is not enough: the violation
    passed review, passed 43 tests and reached the public API. This needs a CI
@@ -662,6 +657,83 @@ Live   authentication ........ DefaultAzureCredential, no API key
    SDK type name.
 8. **`FW-Kimi-K3`'s tool calling is unverified.** `supports_tools` is claimed by
    configuration and no live tool call has been made against this model.
+
+---
+
+## Milestone 05 follow-up — making search work in the chat UI ✅
+
+Raised after live testing: the platform had internet search and the UI could not
+reach it, and conversation memory looked unreliable.
+
+### Memory was working
+
+Verified through the real API and runtime, with the mock provider so it cost
+nothing: two turns in one conversation, four messages stored, history growing.
+`_load_history` and `_record` sit in the runtime, above the provider, so this is
+provider-independent.
+
+The appearance of forgetfulness came from `uvicorn --reload`: session memory is
+in-process, so every file save during development wipes it. The UI already says
+so — "lost when the backend restarts".
+
+### Search was genuinely broken, in four separate places
+
+Each was invisible to the suite, and each hid the next.
+
+| # | Defect | Why no test caught it |
+| --- | --- | --- |
+| 1 | Both engines' `stream()` returned the agent's iterator directly, never running the tool loop. The streaming endpoint — the only one the browser uses — could not call a tool. | Tool tests exercised `execute`. Streaming tests exercised streaming. Nothing asserted the two capabilities composed. |
+| 2 | No provider populated `CompletionChunk.tool_calls`. The recorded limitation said the *contract* could not carry a tool call; the field had existed since Milestone 04. | The mock never streamed a tool call either, so the whole streaming-plus-tools path had no coverage on either side. |
+| 3 | `CompletionRequest` carried tool **ids** but no schemas, so the provider declared `{"type": "object", "properties": {}}` — a tool taking no arguments. The model was told a tool existed but not how to call it, and some deployments reject an empty schema with HTTP 400. | The mock matches on ids and never reads a schema. It answered correctly no matter what was declared. |
+| 4 | `_to_azure_messages` dropped `tool_calls` when converting an assistant message, so the tool result was sent answering a call the transcript never contained. HTTP 400 — **after** the tool had run and been paid for. | No test round-tripped an assistant message carrying tool calls back into a request. |
+
+### Also found, and worse than the four above
+
+**Streamed connections were never closed.** The provider looked for a `close`
+method; the SDK's `AsyncStreamingChatCompletions` defines only `aclose`. Every
+streamed request leaked its connection until the garbage collector reached it.
+
+The test asserting closure passed throughout, because the fake defined
+`close()` — shaped to the code rather than to the SDK. The fake now exposes
+`aclose` and only `aclose`.
+
+This is the sharpest example so far of the recurring lesson: **a double that is
+more convenient than the real thing tests the double.**
+
+### What was built
+
+`stream_tool_loop`, the streaming counterpart of `run_tool_loop`, shared by both
+engines. It streams, collects any tool calls, holds the terminal chunk back
+until it knows whether the turn is really over, runs the tools, and streams the
+answer — so the consumer sees one uninterrupted answer and never learns there
+were two model calls. Usage accumulates across them, because reporting only the
+last would under-report what a tool turn cost.
+
+`CompletionRequest.tools` now carries full declarations, resolved by the
+workflow layer from the registry. The provider is handed finished declarations
+and still never sees a registry, so inference stays uncoupled from tooling.
+
+### Verification
+
+```
+ruff / black / mypy --strict ... clean (140 files)
+pytest ....................... 592 passed   (566 before)
+                               26 new: streaming tool loop across both engines,
+                               streamed tool-call assembly, fragment continuation
+
+Live   streaming + search .... tool.completed succeeded=True, 109 ms
+                               HTTP 200, 270 delta chunks, grounded answer
+Free   multi-turn memory ..... 4 messages stored across 2 turns
+```
+
+### Known limitations
+
+1. **Cost still reports zero** until the deployment's rates are configured.
+2. **A tool turn's first stream produces no visible text**, so time-to-first-token
+   for a searching answer is one full model call plus the tool. Expected, but it
+   is the slowest path in the product.
+3. **The tool exchange is still invisible to the user.** The UI shows the grounded
+   answer with no indication that a search happened.
 
 ---
 

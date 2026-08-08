@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from agent_platform.tools.tool_executor import ToolExecutor
-from agent_platform.workflow.tool_loop import run_tool_loop
+from agent_platform.workflow.tool_loop import run_tool_loop, stream_tool_loop
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import CompletionChunk
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
@@ -77,10 +77,13 @@ class DirectWorkflowEngine:
         request: AgentRequest,
         context: ExecutionContext,
     ) -> AsyncIterator[CompletionChunk]:
-        """Return the agent's chunk stream directly.
+        """Stream the agent's answer, running any tools it requests.
 
-        Not an async generator wrapping the agent's — returning the iterator
-        itself keeps ``aclose()`` reaching the agent, so cancelling a stream
-        still releases the provider connection.
+        Shares :func:`stream_tool_loop` with the LangGraph engine, for the same
+        reason ``execute`` shares ``run_tool_loop``: the orchestration differs
+        between engines, the loop does not.
+
+        The loop closes the agent's iterator in a ``finally``, so cancelling a
+        stream still releases the provider connection.
         """
-        return agent.stream(request, context)
+        return stream_tool_loop(agent, request, context, self._tool_executor)

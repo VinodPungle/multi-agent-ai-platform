@@ -22,6 +22,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_platform_sdk.dto.message import Message, ToolCall
+from agent_platform_sdk.dto.tool import ToolDescriptor
 from agent_platform_sdk.types.enums import ResponseFormat
 
 __all__ = [
@@ -96,6 +97,17 @@ class CompletionRequest(BaseModel):
     tool_ids: tuple[str, ...] = Field(
         default=(),
         description="Tools the model may call, resolved through the tool registry.",
+    )
+    tools: tuple[ToolDescriptor, ...] = Field(
+        default=(),
+        description=(
+            "Full declarations for the tools the model may call. Ids alone are "
+            "not enough: a provider can only tell the model a tool exists, not "
+            "what arguments it takes, so the model either cannot call it or "
+            "calls it with nothing. Populated by the workflow layer, which owns "
+            "the tool registry — the provider must never read that registry "
+            "itself, or inference becomes coupled to tooling."
+        ),
     )
     response_format: ResponseFormat | None = Field(
         default=None,
