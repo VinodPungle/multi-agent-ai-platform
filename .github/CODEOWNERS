@@ -1,0 +1,52 @@
+# =============================================================================
+# Code owners
+# =============================================================================
+# Who is automatically requested to review a change, by path.
+#
+# CODEOWNERS only requests a review. It becomes an *enforced* gate when branch
+# protection on `main` enables "Require review from Code Owners" — see
+# docs/runbooks/ci-cd.md. Without that, this file is a routing hint.
+#
+# One owner today, because there is one maintainer. The paths are split anyway:
+# the split is the durable part, and adding a second person later is then a
+# change to a line rather than a decision about what the lines should be.
+#
+# Later entries win, so the specific rules at the bottom override the catch-all.
+# =============================================================================
+
+# Default owner for anything not matched below.
+*                           @VinodPungle
+
+# --- Things that are expensive to get wrong ---------------------------------
+
+# Infrastructure provisions billable resources and grants roles.
+/infra/                     @VinodPungle
+/azure.yaml                 @VinodPungle
+
+# The pipeline holds the credentials and decides what reaches production.
+# A change here can disable a gate without any test noticing.
+/.github/workflows/         @VinodPungle
+/.github/CODEOWNERS         @VinodPungle
+/.github/dependabot.yml     @VinodPungle
+
+# Container images are the deployment artefact and run as a user with
+# privileges.
+/docker/                    @VinodPungle
+
+# --- Architecture -----------------------------------------------------------
+
+# Contracts. A change here reaches every implementation, and a breaking one
+# reaches them silently at runtime rather than at compile time.
+/src/sdk/                   @VinodPungle
+
+# The provider boundary. This is where "no Azure type escapes" is upheld, and
+# where it has been broken before.
+/src/backend/agent_platform/providers/  @VinodPungle
+
+# Prompts are versioned assets. Editing one changes agent behaviour with no
+# code review of any code.
+/prompts/                   @VinodPungle
+
+# Architecture decisions and the standing instructions for this repository.
+/docs/adr/                  @VinodPungle
+/.claude/                   @VinodPungle

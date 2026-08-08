@@ -1,0 +1,137 @@
+# =============================================================================
+# Reusable: quality gates
+# =============================================================================
+# Every check the handbook requires of a change: formatting, linting, strict
+# type checking and tests, for both the backend and the frontend.
+#
+# Reusable so CI and CD run *the same* checks. Duplicated between two workflows
+# they drift, and the way that failure presents is the worst available: a
+# release pipeline that is more permissive than the pull request pipeline, so
+# something that could not merge can still deploy.
+#
+# Called with `workflow_call`, so a failure here fails the caller's job list
+# with the step that caused it named.
+# =============================================================================
+
+name: Reusable — quality gates
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version for the backend.
+        type: string
+        default: '3.12'
+      node-version:
+        description: Node version for the frontend.
+        type: string
+        default: '22'
+      upload-artifacts:
+        description: Upload coverage and build output. Off for release runs that discard them.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        # `--frozen` fails if uv.lock is out of date with the manifests, which
+        # catches a dependency change committed without its lock update.
+        run: uv sync --all-packages --frozen
+
+      - name: Ruff (lint)
+        run: uv run ruff check --output-format=github .
+
+      - name: Ruff (format check)
+        # Both formatters run. They have disagreed in this repository before,
+        # and the disagreement only shows up as a file that each rewrites in
+        # turn — which a single check would never reveal.
+        run: uv run ruff format --check .
+
+      - name: Black (format check)
+        run: uv run black --check --diff .
+
+      - name: mypy (strict type check)
+        run: uv run mypy
+
+      - name: pytest
+        run: uv run pytest --cov --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        # `always()`: coverage from a failing run is exactly what a developer
+        # needs to see.
+        if: always() && inputs.upload-artifacts
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          retention-days: 7
+
+  frontend:
+    name: Frontend (lint, types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: src/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` installs the locked tree exactly and fails on lock drift.
+        run: npm ci --no-audit --no-fund
+
+      - name: Prettier (format check)
+        run: npm run format:check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm run test:coverage
+
+      - name: Build
+        env:
+          # A placeholder. The deployable bundle is built during deployment with
+          # the real backend URL, because Vite bakes this value in at build time
+          # — see azure.yaml. This step proves the build compiles, nothing more.
+          VITE_API_BASE_URL: http://localhost:8000
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        if: inputs.upload-artifacts
+        with:
+          name: frontend-dist
+          path: src/frontend/dist
+          retention-days: 7

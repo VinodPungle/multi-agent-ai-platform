@@ -9,6 +9,7 @@ Operational procedures for diagnosing and resolving production incidents.
 | [Azure AI Foundry setup](./azure-ai-foundry-setup.md) | Connecting a deployment, RBAC, keyless auth, scale-to-zero, troubleshooting |
 | [Search providers](./search-providers.md) | Choosing a search backend, Tavily keys, cost control |
 | [Deployment](./deployment.md) | Provisioning with azd, secrets, environments, cost, teardown |
+| [CI/CD](./ci-cd.md) | Pipelines, federated credentials, approvals, rollback, scanning |
 
 ## Not yet populated
 

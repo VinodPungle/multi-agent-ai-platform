@@ -1,20 +1,33 @@
 # =============================================================================
 # Continuous Integration
 # =============================================================================
-# Runs every gate the handbook requires of a pull request: formatting, linting,
-# type checking, unit tests, integration tests, container builds and
-# infrastructure validation.
+# Every gate the handbook requires of a change: formatting, linting, type
+# checking, tests, container builds, image scanning and infrastructure
+# validation.
 #
-# Jobs are split by concern rather than run as one long script, so a failure
-# names its cause in the job list and an unrelated area still reports its own
-# result.
+# The quality and image jobs come from reusable workflows shared with the
+# deployment pipeline, so a release cannot pass checks a pull request would have
+# failed. Duplicated, they drift — and the drift always favours the release
+# pipeline, because that is the one under time pressure.
+#
+# Triggers
+#   Also on feature branches, not only main. That is not a convenience: with
+#   triggers limited to main and pull requests to it, six milestones of work on
+#   a long-lived feature branch produced exactly zero CI runs. A gate nothing
+#   reaches is not a gate.
 # =============================================================================
 
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'feature/**'
+      - 'fix/**'
+      - 'refactor/**'
+      - 'infra/**'
+      - 'docs/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -29,184 +42,27 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  PYTHON_VERSION: '3.12'
-  NODE_VERSION: '22'
-
 jobs:
   # ---------------------------------------------------------------------------
-  backend:
-    name: Backend (lint, types, tests)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        # `--frozen` fails if uv.lock is out of date with the manifests, which
-        # catches a dependency change committed without its lock update.
-        run: uv sync --all-packages --frozen
-
-      - name: Ruff (lint)
-        run: uv run ruff check --output-format=github .
-
-      - name: Black (format check)
-        run: uv run black --check --diff .
-
-      - name: mypy (strict type check)
-        run: uv run mypy
-
-      - name: pytest
-        run: uv run pytest --cov --cov-report=xml --cov-report=term
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        # `always()`: coverage from a failing run is exactly what a developer
-        # needs to see.
-        if: always()
-        with:
-          name: backend-coverage
-          path: coverage.xml
-          retention-days: 7
+  quality:
+    name: Quality gates
+    uses: ./.github/workflows/reusable-test.yml
+    permissions:
+      contents: read
 
   # ---------------------------------------------------------------------------
-  frontend:
-    name: Frontend (lint, types, tests, build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    defaults:
-      run:
-        working-directory: src/frontend
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: src/frontend/package-lock.json
-
-      - name: Install dependencies
-        # `npm ci` installs the locked tree exactly and fails on lock drift.
-        run: npm ci --no-audit --no-fund
-
-      - name: Prettier (format check)
-        run: npm run format:check
-
-      - name: ESLint
-        run: npm run lint
-
-      - name: TypeScript
-        run: npm run typecheck
-
-      - name: Vitest
-        run: npm run test:coverage
-
-      - name: Build
-        env:
-          VITE_API_BASE_URL: http://localhost:8000
-        run: npm run build
-
-      - name: Upload build output
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: src/frontend/dist
-          retention-days: 7
-
-  # ---------------------------------------------------------------------------
-  containers:
-    name: Container builds
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/backend.Dockerfile
-          target: production
-          push: false
-          load: true
-          tags: agent-platform-backend:ci
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
-
-      - name: Build frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/frontend.Dockerfile
-          target: production
-          push: false
-          load: true
-          tags: agent-platform-frontend:ci
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,scope=frontend,mode=max
-
-      - name: Verify the backend image serves traffic
-        # Building an image proves it compiles, not that it runs. Starting it
-        # and probing /live is what catches a broken entrypoint, a missing
-        # runtime dependency, or a permission error from running as non-root.
-        run: |
-          docker run --detach --name backend-ci \
-            --env PLATFORM_APP__ENVIRONMENT=testing \
-            --publish 8000:8000 \
-            agent-platform-backend:ci
-
-          for attempt in $(seq 1 30); do
-            if curl --silent --fail http://localhost:8000/live > /dev/null; then
-              echo "Backend responded after ${attempt} attempt(s)."
-              curl --silent http://localhost:8000/health
-              docker rm --force backend-ci
-              exit 0
-            fi
-            sleep 2
-          done
-
-          echo "Backend did not become healthy. Container logs:"
-          docker logs backend-ci
-          docker rm --force backend-ci
-          exit 1
-
-      - name: Verify the frontend image serves the bundle
-        run: |
-          docker run --detach --name frontend-ci --publish 8080:8080 \
-            agent-platform-frontend:ci
-
-          for attempt in $(seq 1 20); do
-            if curl --silent --fail http://localhost:8080/healthz > /dev/null; then
-              echo "Frontend responded after ${attempt} attempt(s)."
-              curl --silent --fail http://localhost:8080/ | head -c 200
-              docker rm --force frontend-ci
-              exit 0
-            fi
-            sleep 2
-          done
-
-          echo "Frontend did not become healthy. Container logs:"
-          docker logs frontend-ci
-          docker rm --force frontend-ci
-          exit 1
+  images:
+    name: Container images
+    uses: ./.github/workflows/reusable-build.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    with:
+      # Build and verify only. Publication belongs to the deployment pipeline,
+      # which knows which registry and which environment.
+      push: false
+      image-tag: ci-${{ github.sha }}
 
   # ---------------------------------------------------------------------------
   infrastructure:
@@ -247,6 +103,29 @@ jobs:
         run: |
           python -c "import yaml,pathlib,sys; yaml.safe_load(pathlib.Path('azure.yaml').read_text()); print('azure.yaml is valid YAML')"
 
+      - name: Lint the workflows themselves
+        # The pipeline is code, and it is the only code with no type checker and
+        # no test suite. actionlint catches an undefined expression, a bad
+        # `needs` reference or a wrong action input — all of which otherwise
+        # fail at the least useful moment, mid-run, on the branch that triggered
+        # them.
+        uses: rhysd/actionlint@v1.7.7
+        with:
+          fail-on-error: true
+
+      - name: Validate the pre-flight scripts
+        # They run before every provision. A syntax error in one is discovered
+        # at the least convenient moment otherwise.
+        run: |
+          sh -n infra/scripts/preflight.sh
+          echo "preflight.sh parses"
+          pwsh -NoProfile -Command "
+            \$errors = \$null
+            [System.Management.Automation.Language.Parser]::ParseFile('infra/scripts/preflight.ps1', [ref]\$null, [ref]\$errors) > \$null
+            if (\$errors.Count -gt 0) { \$errors | ForEach-Object { Write-Error \$_.Message }; exit 1 }
+            Write-Host 'preflight.ps1 parses'
+          "
+
   # ---------------------------------------------------------------------------
   security:
     name: Security scanning
@@ -276,6 +155,7 @@ jobs:
         if: always()
         with:
           sarif_file: trivy-results.sarif
+          category: filesystem
 
       - name: Fail on high or critical findings
         uses: aquasecurity/trivy-action@0.28.0
@@ -284,28 +164,25 @@ jobs:
           scanners: vuln,secret
           format: table
           severity: HIGH,CRITICAL
-          exit-code: '1'
           ignore-unfixed: true
+          exit-code: '1'
 
   # ---------------------------------------------------------------------------
   ci:
     name: CI
     runs-on: ubuntu-latest
-    needs: [backend, frontend, containers, infrastructure, security]
+    needs: [quality, images, infrastructure, security]
     if: always()
 
     steps:
       - name: Verify every gate passed
-        # A single required status check for branch protection. Without this,
-        # protection rules must list every job by name and silently stop
-        # covering any job added later.
+        # One required check for branch protection. Without it, protecting the
+        # branch means listing every job by name and updating that list whenever
+        # the pipeline changes — which is forgotten exactly when a new gate is
+        # added, silently making it optional.
         run: |
-          results='${{ join(needs.*.result, ' ') }}'
-          echo "Job results: ${results}"
-          for result in ${results}; do
-            if [ "${result}" != "success" ]; then
-              echo "::error::At least one CI gate did not pass."
-              exit 1
-            fi
-          done
-          echo "All CI gates passed."
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "One or more gates failed."
+            exit 1
+          fi
+          echo "All gates passed."

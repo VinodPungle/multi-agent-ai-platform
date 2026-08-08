@@ -1,0 +1,73 @@
+# =============================================================================
+# CodeQL — semantic security analysis
+# =============================================================================
+# Separate from CI deliberately. CodeQL takes minutes and finds defects that
+# accumulate slowly, so running it on every push to a feature branch would add
+# latency to the feedback loop it does not repay. It runs on pull requests, on
+# main, and weekly.
+#
+# The weekly run is the one that earns its place: CodeQL's queries are updated
+# continuously, so code that was clean when merged can be reported later without
+# anyone changing it. A pull-request-only schedule never revisits merged code.
+#
+# It complements Trivy rather than duplicating it. Trivy answers "does a
+# dependency or image have a known CVE"; CodeQL answers "does our own code have
+# an injection path, an unsafe deserialisation, a leaked secret in a log".
+# =============================================================================
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays, 07:00 UTC — before the working week, after Dependabot's 06:00.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    name: Analyse ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # `security-and-quality` over the default `security` set: it also
+          # reports maintainability defects, and the ones it finds — unused
+          # results, unreachable code, inconsistent equality — are the kind that
+          # hide a real bug rather than merely offending taste.
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
