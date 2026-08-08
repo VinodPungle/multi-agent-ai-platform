@@ -36,6 +36,9 @@ dev = [
     # `filterwarnings = error` turns into a collection failure.
     "httpx2>=0.1.0",
     "mypy>=1.14.0",
+    # Managed as a project dependency rather than installed globally, so every
+    # contributor and CI run the same hook framework version.
+    "pre-commit>=4.0.0",
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=6.0.0",
@@ -62,7 +65,7 @@ agent-platform-shared = { workspace = true }
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src/backend", "src/sdk", "src/shared", "tests"]
+src = ["src/backend", "src/sdk", "src/shared", "tests", "scripts"]
 extend-exclude = [".venv", "node_modules", "src/frontend"]
 
 [tool.ruff.lint]
@@ -128,8 +131,12 @@ warn_unreachable = true
 warn_no_return = true
 show_error_codes = true
 pretty = true
-files = ["src/backend", "src/sdk", "src/shared", "tests"]
+files = ["src/backend", "src/sdk", "src/shared", "tests", "scripts"]
 exclude = ["^\\.venv/", "^node_modules/", "^src/frontend/"]
+# `scripts/` holds standalone tools, not an installed package. Adding it to the
+# search path lets both mypy and the test suite import them by module name
+# instead of loading them from a file path, which would type them as `Any`.
+mypy_path = ["scripts"]
 
 [[tool.mypy.overrides]]
 # dependency-injector ships partial stubs; its dynamic provider attributes are
@@ -144,6 +151,9 @@ follow_imports = "skip"
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# Mirrors `mypy_path`: the developer scripts are importable by name, so they are
+# tested like any other module rather than exercised only by running them.
+pythonpath = ["scripts"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = [
@@ -162,7 +172,7 @@ filterwarnings = ["error"]
 # -----------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
-source = ["src/backend", "src/sdk", "src/shared"]
+source = ["src/backend", "src/sdk", "src/shared", "scripts"]
 omit = ["*/__main__.py"]
 
 [tool.coverage.report]
