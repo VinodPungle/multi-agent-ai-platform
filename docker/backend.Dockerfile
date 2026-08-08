@@ -100,6 +100,14 @@ CMD ["uvicorn", "agent_platform.api.app:create_app", \
 # -----------------------------------------------------------------------------
 FROM base AS production
 
+# Patch the distribution before anything else, for the same reason as the
+# frontend: a pinned base image drifts behind between bumps, and the gap is
+# where CI's image scan finds things.
+RUN apt-get update \
+ && apt-get upgrade --yes --no-install-recommends \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 # Non-root by default (handbook, "Container Standards"). A fixed uid/gid keeps
 # volume ownership predictable across hosts.
 RUN groupadd --gid 10001 platform \

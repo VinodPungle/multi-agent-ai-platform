@@ -12,7 +12,7 @@
 # =============================================================================
 
 ARG NODE_VERSION=22
-ARG NGINX_VERSION=1.27
+ARG NGINX_VERSION=1.29
 
 # -----------------------------------------------------------------------------
 # Stage 1 — dependencies
@@ -68,6 +68,16 @@ RUN npm run build
 # Stage 4 — production
 # -----------------------------------------------------------------------------
 FROM nginx:${NGINX_VERSION}-alpine AS production
+
+# Patch the distribution before anything else. A pinned base image begins
+# drifting behind the moment it is published, so the pin alone guarantees
+# nothing about the day this is built — CI's image scan found a CRITICAL
+# OpenSSL heap overflow (CVE-2026-31789) sitting in exactly that gap.
+#
+# It costs a layer and some build time, and it means two builds of the same
+# commit can differ. That is the correct trade for a public-facing image: a
+# reproducible build of a vulnerable image is not worth much.
+RUN apk upgrade --no-cache
 
 # The nginx image ships an unprivileged `nginx` user; binding port 8080 rather
 # than 80 avoids needing CAP_NET_BIND_SERVICE to run as that user.
