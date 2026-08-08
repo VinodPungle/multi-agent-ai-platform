@@ -119,9 +119,15 @@ docker compose up --build
 | | |
 | --- | --- |
 | Frontend | <http://localhost:5173> |
+| Chat | <http://localhost:5173/chat> |
 | Backend | <http://localhost:8000> |
 | API docs | <http://localhost:8000/docs> |
 | Health | <http://localhost:8000/health> |
+
+Chat answers come from the **mock provider**, which generates text locally.
+Compose enables it; if you run the backend directly, `.env` does (copy
+`.env.example`). Configuration validation refuses to start a staging or
+production environment with it enabled.
 
 Both services hot reload: edit a file on the host and the container picks it up.
 Source is mounted read-only, so a container can never write into your working
@@ -339,6 +345,21 @@ lsof -i :8000
 # Windows
 netstat -ano | findstr :8000
 ```
+
+**Chat replies with "No LLM provider is registered"**
+
+The mock provider is off. It defaults to off so that the unsafe state is always
+one somebody chose:
+
+```dotenv
+PLATFORM_MOCK_PROVIDER__ENABLED=true
+```
+
+**The answer appears all at once instead of streaming**
+
+Either the per-chunk delay is zero (`PLATFORM_MOCK_PROVIDER__CHUNK_DELAY_SECONDS`),
+or something between the browser and the backend is buffering. The backend sends
+`X-Accel-Buffering: no` for nginx; other proxies may need their own setting.
 
 **Frontend shows "Could not reach the platform API"**
 

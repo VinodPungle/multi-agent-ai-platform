@@ -7,8 +7,8 @@ acceptance criterion is verified, not merely implemented.
 | --- | --- | --- | --- |
 | 01 | [Repository Foundation](./milestone-01-foundation.md) | ✅ **Complete** | 2026-08-08 |
 | 01.5 | [Developer Experience](./milestone-01.5-developer-experience.md) | ✅ **Complete** | 2026-08-08 |
-| 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ⬜ Next | — |
-| 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ⬜ Not started | — |
+| 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ✅ **Complete** | 2026-08-08 |
+| 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ⬜ Next | — |
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ⬜ Not started | — |
 | 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Not started | — |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Not started | — |
@@ -249,6 +249,96 @@ pytest .......................... 236 passed (197 before)
 
 ---
 
-## Next: Milestone 02 — Chat UI and Session Memory
+## Milestone 02 — Chat UI and Session Memory ✅
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Chat page loads | ✅ | Route at `/chat`, lazy-loaded; 20 component tests drive the real tree |
+| User can submit prompts | ✅ | Send button, Enter to send, Shift+Enter for a newline, IME-safe |
+| Responses stream from the mock provider | ✅ | Verified against a running server: `started` → 60+ `delta` → `completed` |
+| Session memory maintains the conversation | ✅ | Turn 2 of a live conversation reported "turn 2"; 4 messages stored |
+| Markdown renders correctly | ✅ | Headings, lists, tables, blockquotes and links become elements |
+| Code blocks are highlighted | ✅ | `rehype-highlight` with tokens keyed to the theme; per-block copy button |
+| Dark mode works | ✅ | Three-state preference (system/light/dark), persisted, `data-theme` on `<html>` |
+| Mobile layout is usable | ✅ | Fluid widths, `max-w-[min(46rem,85%)]` bubbles, wrapping header, scrollable code |
+
+### Test cases
+
+| Case | Status | Detail |
+| --- | --- | --- |
+| Multiple sequential prompts | ✅ | Conversation id is reused; history grows; the model sees earlier turns |
+| Long streamed responses | ✅ | 60+ chunk stream reassembles exactly; `memo` keeps re-render cost flat |
+| Browser refresh clears the session | ✅ | Conversation lives in React state; a new process starts empty (asserted) |
+| Empty prompt validation | ✅ | Rejected at the boundary, in the service, and disabled in the UI |
+| Network interruption handling | ✅ | Transport failure, mid-stream failure and cancellation are three distinct paths |
+
+### What was built
+
+**Backend.** A `MockLLMProvider` implementing the real `LLMProvider` contract —
+not a stub in the service layer, so it routes through the LLM Gateway exactly as
+Azure AI Foundry will. `InMemorySessionMemoryProvider`, bounded and LRU-evicting.
+`ChatService`, depending only on the `LLMGateway` and `MemoryProvider` protocols.
+An SSE encoder, and five chat routes.
+
+**Frontend.** An SSE client built on `fetch` (not `EventSource` — see
+[ADR-0008](../adr/0008-server-sent-events-for-streaming-chat.md)), a `useChat`
+hook owning the streaming lifecycle, and a chat interface with Markdown, syntax
+highlighting, typing indicator, stop, regenerate and clear. Routing arrives with
+the second module, as planned.
+
+### Defects found during verification, and fixed
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| Validation ran *inside* the streaming generator, which `StreamingResponse` does not iterate until after the 200 and SSE headers are sent — so an empty message got a 200 and an SSE stream instead of a 422 | Integration test asserting the status code of a whitespace-only streamed message | `ChatService.stream()` became an `async def` returning an iterator, so everything that can fail cheaply fails before the response is committed |
+| The `started` event published `provider_id: ""` — the gateway resolves the provider when the first chunk is requested, which is after that event must be sent | Reading the real SSE output from a running server; every test passed | Field removed. A field that is always wrong is worse than an absent one; attribution is on the non-streaming response and in telemetry |
+| `request()` threw on a 204, so a successful `DELETE` surfaced as a network failure | Writing the clear-conversation path | 204/205 short-circuit before `response.json()` |
+| The production bundle grew to 712 kB because `rehype-highlight` statically imports lowlight's full `common` language set — a `languages` option cannot shrink it | `vite build` size warning | Chat route lazy-loaded: initial bundle 366 kB, chat chunk 346 kB fetched on first visit. An earlier attempt to restrict the language list was removed once measurement showed it saved nothing and only narrowed coverage |
+| The mock provider's default `enabled=true` made every production-like configuration invalid | Two pre-existing configuration tests failed | Default flipped to `false`, matching the posture of every other setting in the file; enabled explicitly in `.env.example` and Compose |
+
+### Verification performed
+
+```
+Backend    ruff .............. All checks passed
+           black ............. 109 files unchanged
+           mypy --strict ..... no issues in 109 source files
+           pytest ............ 360 passed, 97% statement coverage  (197 before)
+
+Frontend   eslint ............ no problems
+           prettier .......... all files formatted
+           tsc (strict) ...... no errors
+           vitest ............ 70 passed  (33 before)
+           vite build ........ 366 kB initial + 346 kB chat chunk
+
+Live       streaming ......... started → 60+ deltas → completed, against a real server
+           session memory .... turn 2 saw turn 1; 4 messages stored
+           clear ............. DELETE returned 204
+```
+
+### Known limitations
+
+1. **Memory is process-local.** `InMemorySessionMemoryProvider` is not shared
+   between replicas, so it must not run behind a load balancer. Redis replaces
+   it by configuration.
+2. **No reconnection.** A connection dropped mid-generation loses the remainder
+   of that answer. The partial text is kept and the user can regenerate.
+3. **A mid-stream failure returns HTTP 200.** Monitoring that watches status
+   codes alone will not see it; the `chat.turn_failed` log event carries it.
+4. **The mock provider is not a model.** Its answers are templated and
+   deterministic. Anything that appears to work because of *what* it says is
+   proving nothing.
+5. **No end-to-end browser test.** The component tests run in jsdom, which has
+   no layout — so scroll-following and responsive behaviour are verified by
+   inspection, not by assertion. Playwright arrives in Milestone 08.
+6. **Conversation history is not restored on reload.** The backend keeps it and
+   `GET /conversations/{id}` returns it, but the frontend holds the id in React
+   state only. Deliberate: "until browser refresh" is the milestone's stated
+   scope.
+
+---
+
+## Next: Milestone 03 — Agent Runtime and LangGraph
 
 Not started. Awaiting approval before any work begins.
