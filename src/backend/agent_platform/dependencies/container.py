@@ -32,9 +32,12 @@ from agent_platform.registries import (
     KeyedRegistry,
     ModelRegistry,
     ProviderRegistry,
-    ToolRegistry,
 )
 from agent_platform.runtime.agent_runtime import AgentRuntime
+from agent_platform.search.duckduckgo_search_provider import DuckDuckGoSearchProvider
+from agent_platform.search.mock_search_provider import MockSearchProvider
+from agent_platform.tools.internet_search_tool import InternetSearchTool
+from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform.workflow.direct_engine import DirectWorkflowEngine
 from agent_platform.workflow.langgraph_engine import LangGraphWorkflowEngine
 from agent_platform_sdk.dto.agent import AgentDescriptor
@@ -43,7 +46,10 @@ from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_sdk.interfaces.provider import Provider
+from agent_platform_sdk.interfaces.search_provider import SearchProvider
+from agent_platform_sdk.interfaces.tool_provider import ToolProvider
 from agent_platform_sdk.interfaces.workflow_engine import WorkflowEngine
+from agent_platform_sdk.policies.budget import BudgetPolicy
 from agent_platform_shared.clock import SystemClock
 
 __all__ = [
@@ -53,6 +59,8 @@ __all__ = [
     "build_llm_providers",
     "build_model_registry",
     "build_provider_registry",
+    "build_search_provider",
+    "build_tool_registry",
     "build_workflow_engine",
 ]
 
@@ -103,7 +111,46 @@ def build_model_registry() -> ModelRegistry:
     return KeyedRegistry("model")
 
 
-def build_workflow_engine(settings: PlatformSettings) -> WorkflowEngine:
+def build_search_provider(settings: PlatformSettings) -> SearchProvider:
+    """Return the configured search backend.
+
+    Both satisfy one interface, so the internet-search tool cannot tell which it
+    has — which is what makes a keyed provider a later addition rather than a
+    change to the tool.
+    """
+    if settings.search.provider == "mock":
+        return MockSearchProvider()
+    return DuckDuckGoSearchProvider(timeout_seconds=settings.search.timeout_seconds)
+
+
+def build_tool_registry(
+    settings: PlatformSettings,
+    search_provider: SearchProvider,
+) -> KeyedRegistry[ToolProvider]:
+    """Register every tool this deployment offers.
+
+    Gated on `features.search`: with the flag off the tool is simply not
+    registered, so an agent that declares it runs without it and the turn costs
+    exactly one model call. That is a real off switch rather than a tool that
+    exists and refuses.
+    """
+    registry: KeyedRegistry[ToolProvider] = KeyedRegistry("tool")
+
+    if settings.features.search:
+        tool = InternetSearchTool(
+            provider=search_provider,
+            timeout_seconds=settings.search.timeout_seconds,
+            max_results=settings.search.max_results,
+        )
+        registry.register(tool.descriptor.tool_id, tool)
+
+    return registry
+
+
+def build_workflow_engine(
+    settings: PlatformSettings,
+    tool_executor: ToolExecutor,
+) -> WorkflowEngine:
     """Return the configured workflow engine.
 
     Two implementations of one protocol. `direct` involves no graph library at
@@ -111,8 +158,8 @@ def build_workflow_engine(settings: PlatformSettings) -> WorkflowEngine:
     problem — and proof that the abstraction is not LangGraph-shaped.
     """
     if settings.workflow.engine == "direct":
-        return DirectWorkflowEngine()
-    return LangGraphWorkflowEngine()
+        return DirectWorkflowEngine(tool_executor)
+    return LangGraphWorkflowEngine(tool_executor)
 
 
 def build_agent_registry(settings: PlatformSettings, gateway: LLMGateway) -> AgentRegistry:
@@ -134,6 +181,11 @@ def build_agent_registry(settings: PlatformSettings, gateway: LLMGateway) -> Age
         prompt_version=settings.agent.prompt_version,
         temperature=settings.agent.temperature,
         max_output_tokens=settings.agent.max_output_tokens,
+        tool_ids=settings.agent.tool_ids,
+        budget=BudgetPolicy(
+            max_tool_invocations=settings.agent.max_tool_invocations,
+            max_model_calls=settings.agent.max_model_calls,
+        ),
     )
     agent: Agent = ChatAgent(descriptor, gateway)
     registry.register(descriptor.agent_id, agent)
@@ -144,6 +196,7 @@ def build_agent_registry(settings: PlatformSettings, gateway: LLMGateway) -> Age
 def build_health_probes(
     memory: MemoryProvider,
     prompts: FilePromptProvider,
+    search: SearchProvider,
     llm_providers: tuple[LLMProvider, ...],
 ) -> tuple[Provider, ...]:
     """Return every component ``/ready`` should probe.
@@ -152,7 +205,7 @@ def build_health_probes(
     reads top to bottom, and the cheapest, most fundamental dependencies should
     be the first lines an operator sees.
     """
-    return (memory, prompts, *llm_providers)
+    return (memory, prompts, search, *llm_providers)
 
 
 class ApplicationContainer(containers.DeclarativeContainer):
@@ -195,6 +248,10 @@ class ApplicationContainer(containers.DeclarativeContainer):
         root=providers.Callable(Path, settings.provided.chat.prompts_directory),
     )
 
+    #: Where search results come from. The interface is what the tool depends
+    #: on, so a keyed provider replaces this line and nothing else.
+    search_provider = providers.Singleton(build_search_provider, settings)
+
     #: Registered LLM providers, chosen by configuration.
     llm_providers = providers.Singleton(build_llm_providers, settings)
 
@@ -202,14 +259,24 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: runtime's publish call sites changing.
     event_publisher = providers.Singleton(LoggingEventPublisher)
 
-    # -- Registries --------------------------------------------------------
+    # -- Registries and tools ----------------------------------------------
 
     provider_registry = providers.Singleton(build_provider_registry, llm_providers)
     model_registry = providers.Singleton(build_model_registry)
 
-    #: Tool metadata. Empty until Milestone 04 — present now so the runtime's
-    #: tool-resolution path exists rather than being inserted later.
-    tool_registry: providers.Singleton[ToolRegistry] = providers.Singleton(KeyedRegistry, "tool")
+    #: Executable tools, gated by the search feature flag. With the flag off the
+    #: registry is empty, so an agent that declares a tool simply runs without
+    #: it — a real off switch rather than a tool that exists and refuses.
+    tool_registry = providers.Singleton(build_tool_registry, settings, search_provider)
+
+    #: The one path through which a tool is ever run: resolve, authorise,
+    #: validate, time out, retry, record. Never raises.
+    tool_executor = providers.Singleton(
+        ToolExecutor,
+        tools=tool_registry,
+        events=event_publisher,
+        clock=clock,
+    )
 
     # -- Inference ---------------------------------------------------------
 
@@ -234,7 +301,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     agent_registry = providers.Singleton(build_agent_registry, settings, llm_gateway)
 
-    workflow_engine = providers.Singleton(build_workflow_engine, settings)
+    workflow_engine = providers.Singleton(build_workflow_engine, settings, tool_executor)
 
     #: The heart of the platform. Depends on interfaces only, so what it
     #: orchestrates is entirely a matter of what was registered above.
@@ -256,7 +323,11 @@ class ApplicationContainer(containers.DeclarativeContainer):
         settings=settings,
         clock=clock,
         providers=providers.Callable(
-            build_health_probes, memory_provider, prompt_provider, llm_providers
+            build_health_probes,
+            memory_provider,
+            prompt_provider,
+            search_provider,
+            llm_providers,
         ),
     )
 

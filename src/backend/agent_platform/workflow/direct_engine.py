@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from agent_platform.tools.tool_executor import ToolExecutor
+from agent_platform.workflow.tool_loop import run_tool_loop
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import CompletionChunk
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
@@ -41,6 +43,15 @@ class DirectWorkflowEngine:
     structurally.
     """
 
+    def __init__(self, tool_executor: ToolExecutor | None = None) -> None:
+        """Create the engine.
+
+        Args:
+            tool_executor: Tool execution pipeline. ``None`` disables tool
+                calling, which is what the search feature flag being off means.
+        """
+        self._tool_executor = tool_executor
+
     @property
     def engine_id(self) -> str:
         """Identifier reported in telemetry."""
@@ -52,13 +63,13 @@ class DirectWorkflowEngine:
         request: AgentRequest,
         context: ExecutionContext,
     ) -> AgentResult:
-        """Call the agent and return what it produced.
+        """Run the agent, including any tool calls it makes.
 
         Failures propagate unchanged. There is no orchestration here that could
         fail, so wrapping an agent's error in a ``WorkflowError`` would only
         hide which layer actually broke.
         """
-        return await agent.execute(request, context)
+        return await run_tool_loop(agent, request, context, self._tool_executor)
 
     def stream(
         self,

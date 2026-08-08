@@ -113,7 +113,14 @@ class ChatAgent:
 
         return CompletionRequest(
             model_id=request.model_id,
-            messages=(*request.history, Message(role=MessageRole.USER, content=request.input)),
+            # history → the user's message → the tool exchange. Order is the
+            # whole point: a tool result before the question it answers reads to
+            # a model as evidence for something nobody asked.
+            messages=(
+                *request.history,
+                Message(role=MessageRole.USER, content=request.input),
+                *request.tool_exchange,
+            ),
             system_prompt=system_prompt,
             # The descriptor's values are the fallback, not the override: a
             # per-request value is a deliberate caller decision and must win.

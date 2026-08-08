@@ -9,8 +9,8 @@ acceptance criterion is verified, not merely implemented.
 | 01.5 | [Developer Experience](./milestone-01.5-developer-experience.md) | ✅ **Complete** | 2026-08-08 |
 | 02 | [Chat UI, Session Memory](./milestone-02-chat-ui-session-memory.md) | ✅ **Complete** | 2026-08-08 |
 | 03 | [Agent Runtime (LangGraph)](./milestone-03-agent-runtime-langgraph.md) | ✅ **Complete** | 2026-08-08 |
-| 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ⬜ Next | — |
-| 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Not started | — |
+| 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ✅ **Complete** | 2026-08-08 |
+| 05 | [Azure AI Foundry, Gemma 4](./milestone-05-azure-ai-foundry-gemma4.md) | ⬜ Next | — |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⬜ Not started | — |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Not started | — |
 | 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Not started | — |
@@ -421,6 +421,89 @@ Live   LangGraph engine ... streaming, session memory and 5 runtime event types
 
 ---
 
-## Next: Milestone 04 — Internet Search and Tool Framework
+## Milestone 04 — Internet Search and Tool Framework ✅
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Runtime discovers tools through the registry | ✅ | `tools=['internet-search']` at startup; an agent's declared tool is resolved through `ToolExecutor` |
+| Internet Search Tool executes successfully | ✅ | Live run returned real Wikipedia citations for "the eiffel tower" |
+| Tool results use platform DTOs | ✅ | `ToolResult` throughout; only title/url/snippet reach the model |
+| Runtime handles timeout and retry | ✅ | Per-descriptor timeout and retry policy in the executor; 18 tests |
+| Telemetry records tool execution | ✅ | `tool.started` / `tool.completed` events and a span per call |
+| Feature flag can disable search | ✅ | With `PLATFORM_FEATURES__SEARCH=false` the tool is not registered, the agent answers without it, and the turn costs one model call |
+
+### Test cases
+
+| Case | Status | Detail |
+| --- | --- | --- |
+| Tool registration | ✅ | Registry conflict, unknown id, withdrawn tool |
+| Successful search | ✅ | Mock and live DuckDuckGo, plus the loop end to end |
+| Timeout handling | ✅ | A hanging tool returns a failed result rather than raising |
+| Retry behaviour | ✅ | Transient retried, deterministic not, contract violation not |
+| Registry resolution | ✅ | Declared-but-unregistered tools are skipped, not fatal |
+| Disabled feature flag | ✅ | Verified live |
+| Invalid provider configuration | ✅ | Searching before initialisation is refused |
+
+### What was built
+
+A `ToolExecutor` that resolves, authorises, validates, times out, retries and
+records — and never raises. The internet-search tool over a `SearchProvider`
+abstraction with two implementations: a deterministic offline mock and a real,
+**keyless** DuckDuckGo provider, so search works on a fresh clone with no signup.
+A tool loop in the workflow layer, shared by both engines. And a mock model that
+genuinely requests tools, so the whole path is exercisable deterministically.
+
+Budget enforcement stopped being advisory. Milestone 03 could only report a
+breach after the fact; the loop checks `max_tool_invocations` and
+`max_model_calls` *between* iterations, where stopping still saves the next call.
+
+### Defects found during verification, and fixed
+
+| Defect | How it surfaced | Fix |
+| --- | --- | --- |
+| The mock's query stripping removed only the trigger word, turning "search for the eiffel tower" into "for the eiffel tower" — which matches nothing. Every live search silently returned no results. | Running the real API end to end. Every unit test passed, because the mock search backend returns results for any string. | Strip trigger *phrases* (`search for`, `find out about`) rather than words |
+| `response.elapsed` is only populated after a response is read, so latency access raised inside the provider | The parsing tests, against `MockTransport` | Measure with `perf_counter` — which also times the budget the provider is accountable for rather than httpx's transport |
+| A test asserted `BudgetPolicy(max_tool_invocations=0)`, which the model rejects (`gt=0`) | Writing it | The budget paths moved to focused tests driven by an agent that never stops asking for tools — the right level, since the well-behaved mock cannot reach them |
+| A fake clock's `now()` raised, on the assumption the executor only used `monotonic()`; it uses both | Tool executor tests | Fake returns a real timestamp |
+
+The first is the one worth remembering: a mock that is too forgiving hides a
+defect in the code that talks to the real thing.
+
+### Verification performed
+
+```
+ruff / black / mypy --strict ... clean (134 files)
+pytest ....................... 503 passed, 96% coverage   (440 before)
+                               78 of them network-free duplicates via `-m "not integration"`
+
+Live   real search ........... "search for the eiffel tower" returned three
+                               cited Wikipedia results through the full pipeline
+       feature flag off ...... tool not registered; answered without search
+```
+
+### Known limitations
+
+1. **Streaming does not use tools.** `CompletionChunk` cannot carry a tool call,
+   so the streaming endpoint — the one the frontend uses — streams the agent
+   directly and never calls a tool. The non-streaming endpoint has the full
+   capability. This is the milestone's most significant gap, and closing it means
+   extending the chunk contract once a real provider's streaming tool protocol is
+   known.
+2. **The LangGraph graph still has one node**, with the loop inside it rather
+   than as `agent → tools → agent` edges.
+3. **Tool arguments are hand-validated**, so the declared JSON Schema and the
+   check can drift. The trade reverses at the first genuinely complex schema.
+4. **DuckDuckGo answers encyclopaedic questions well and current-events
+   questions poorly.** It is an Instant Answer API, not a web-results API.
+5. **No caching.** Every search is a live call, and repeated identical searches
+   in one conversation are repeated cost.
+6. **The tool exchange is not visible to the user.** The UI shows the final
+   answer with citations but not that a search happened.
+
+---
+
+## Next: Milestone 05 — Azure AI Foundry and Gemma 4
 
 Not started. Awaiting approval before any work begins.

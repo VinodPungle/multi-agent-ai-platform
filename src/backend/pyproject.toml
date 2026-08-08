@@ -23,6 +23,9 @@ dependencies = [
     "langgraph>=0.2.60",
     # Prompt asset front matter. Prompts are versioned files with YAML metadata.
     "pyyaml>=6.0.2",
+    # Outbound HTTP for search providers. Async, and the same client the test
+    # suite already uses, so there is one HTTP stack rather than two.
+    "httpx>=0.28.0",
     # Structured logging
     "structlog>=24.4.0",
     # Observability

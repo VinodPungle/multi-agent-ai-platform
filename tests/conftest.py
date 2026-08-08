@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -34,9 +35,18 @@ from agent_platform.configuration.settings import (
     get_settings,
 )
 from agent_platform.events.publisher import LoggingEventPublisher
+from agent_platform.gateway.llm_gateway import DefaultLLMGateway
+from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
+from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform.registries import AgentRegistry, KeyedRegistry
 from agent_platform.runtime.agent_runtime import AgentRuntime
+from agent_platform.search.mock_search_provider import MockSearchProvider
+from agent_platform.tools.internet_search_tool import (
+    INTERNET_SEARCH_TOOL_ID,
+    InternetSearchTool,
+)
+from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform.workflow.direct_engine import DirectWorkflowEngine
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
@@ -50,7 +60,10 @@ from agent_platform_sdk.dto.completion import (
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.dto.prompt import PromptAsset, PromptVariable
 from agent_platform_sdk.interfaces.agent import Agent
+from agent_platform_sdk.interfaces.tool_provider import ToolProvider
 from agent_platform_sdk.interfaces.workflow_engine import WorkflowEngine
+from agent_platform_sdk.policies.retry import RetryPolicy
+from agent_platform_sdk.policies.timeout import TimeoutPolicy
 from agent_platform_sdk.types.enums import Capability, HealthStatus, MessageRole
 
 __all__ = [
@@ -334,6 +347,37 @@ class RuntimeStack:
         self.clock = clock
 
 
+def _tool_capable_gateway() -> DefaultLLMGateway:
+    """A real gateway over the real mock provider, which emits tool calls."""
+    provider = MockLLMProvider(chunk_delay_seconds=0.0)
+    return DefaultLLMGateway(
+        resolver=ConfiguredProviderResolver((provider,)),
+        clock=ManualClock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        timeout_policy=TimeoutPolicy(),
+    )
+
+
+def _tool_executor(clock: ManualClock, search_fails: bool = False) -> ToolExecutor:
+    """A real executor over the real internet-search tool and a mock backend."""
+    from agent_platform.exceptions.base import ProviderError
+    from agent_platform_sdk.dto.search import SearchQuery, SearchResults
+
+    class FailingSearch(MockSearchProvider):
+        async def search(self, query: SearchQuery, context: ExecutionContext) -> SearchResults:
+            del query, context
+            message = "search backend unreachable"
+            raise ProviderError(message)
+
+    backend = FailingSearch() if search_fails else MockSearchProvider()
+    tool: ToolProvider = InternetSearchTool(backend)
+
+    registry: KeyedRegistry[ToolProvider] = KeyedRegistry("tool")
+    registry.register(tool.descriptor.tool_id, tool)
+
+    return ToolExecutor(tools=registry, events=LoggingEventPublisher(), clock=clock)
+
+
 @pytest.fixture
 def build_stack() -> Callable[..., RuntimeStack]:
     """Return a factory that assembles a runtime over a fake gateway.
@@ -354,13 +398,22 @@ def build_stack() -> Callable[..., RuntimeStack]:
         register_agent: bool = True,
         prompt_template: str = "You are a test assistant.",
         prompt_variables: tuple[PromptVariable, ...] = (),
+        with_tools: bool = False,
+        search_fails: bool = False,
         **descriptor_overrides: object,
     ) -> RuntimeStack:
-        gateway = FakeGateway(
-            answer=answer,
-            chunks=chunks,
-            failure=failure,
-            fail_after_chunks=fail_after_chunks,
+        # `with_tools` swaps the fake gateway for a real one over the real mock
+        # provider, because only the real provider emits tool calls. A fake that
+        # emitted them would be testing the fake's idea of the protocol.
+        gateway: Any = (
+            _tool_capable_gateway()
+            if with_tools
+            else FakeGateway(
+                answer=answer,
+                chunks=chunks,
+                failure=failure,
+                fail_after_chunks=fail_after_chunks,
+            )
         )
         prompts = StubPromptProvider(
             PromptAsset(
@@ -370,9 +423,16 @@ def build_stack() -> Callable[..., RuntimeStack]:
                 variables=prompt_variables,
             )
         )
+        if with_tools:
+            descriptor_overrides.setdefault("tool_ids", (INTERNET_SEARCH_TOOL_ID,))
+            descriptor_overrides.setdefault("model_id", "mock-echo")
+            descriptor_overrides.setdefault("provider_id", "mock")
+
         descriptor = a_descriptor(**descriptor_overrides)
         memory = InMemorySessionMemoryProvider()
         clock = ManualClock()
+
+        tool_executor = _tool_executor(clock, search_fails=search_fails) if with_tools else None
 
         agents: AgentRegistry = KeyedRegistry("agent")
         if register_agent:
@@ -384,7 +444,7 @@ def build_stack() -> Callable[..., RuntimeStack]:
             # `direct` by default: these tests are about the runtime, and
             # compiling a graph per call would slow the suite without changing
             # what is being asserted. The LangGraph engine has its own tests.
-            workflow_engine=engine or DirectWorkflowEngine(),
+            workflow_engine=engine or DirectWorkflowEngine(tool_executor),
             memory=memory,
             prompts=prompts,
             events=LoggingEventPublisher(),

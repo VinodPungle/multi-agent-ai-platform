@@ -19,6 +19,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0007](./0007-task-runner-and-git-hook-strategy.md) | Task as the command runner; hooks share the project's tool versions | Accepted | 01.5 |
 | [0008](./0008-server-sent-events-for-streaming-chat.md) | Stream chat over server-sent events, consumed with `fetch` | Accepted | 02 |
 | [0009](./0009-agent-runtime-and-workflow-engine-abstraction.md) | An Agent Runtime, with LangGraph behind a workflow abstraction | Accepted | 03 |
+| [0010](./0010-tool-framework-and-internet-search.md) | A tool framework, with the loop in the workflow layer | Accepted | 04 |
 
 ## Writing one
 

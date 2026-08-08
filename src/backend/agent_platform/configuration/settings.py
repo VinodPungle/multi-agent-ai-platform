@@ -44,6 +44,7 @@ __all__ = [
     "MemorySettings",
     "MockProviderSettings",
     "PlatformSettings",
+    "SearchSettings",
     "ServerSettings",
     "TelemetrySettings",
     "WorkflowSettings",
@@ -299,6 +300,46 @@ class MockProviderSettings(BaseModel):
     )
 
 
+class SearchSettings(BaseModel):
+    """Which search backend answers the internet-search tool.
+
+    `mock` returns fabricated results with no network call, which is what CI and
+    an offline laptop need. `duckduckgo` performs a real, keyless search.
+
+    Chosen as a literal rather than assumed, so adding a keyed provider (Brave,
+    Tavily, Bing) is a new member plus a factory branch — not a new configuration
+    shape every deployment has to learn.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["mock", "duckduckgo"] = Field(
+        default="duckduckgo",
+        description=(
+            "Search backend. `duckduckgo` needs no API key, so the documented local "
+            "setup performs real searches with no signup."
+        ),
+    )
+    timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=120,
+        description=(
+            "Whole-request budget for one search. Bounded deliberately: an unbounded "
+            "search holds a chat turn open for as long as the upstream cares to take."
+        ),
+    )
+    max_results: int = Field(
+        default=5,
+        gt=0,
+        le=10,
+        description=(
+            "Default results per search. Every result is spent context in the next "
+            "prompt, so this is a cost setting as much as a quality one."
+        ),
+    )
+
+
 class WorkflowSettings(BaseModel):
     """Which engine orchestrates agent execution.
 
@@ -355,6 +396,41 @@ class AgentSettings(BaseModel):
     )
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    # `NoDecode` for the same reason as `ServerSettings.cors_origins`, and this
+    # is the third time the trap has been hit: for a collection field,
+    # `pydantic-settings` runs `json.loads` on the raw environment value *before*
+    # any validator, so a comma-separated list raises `SettingsError` at startup
+    # and never reaches the validator below.
+    tool_ids: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=("internet-search",),
+        description=(
+            "Tools this agent may call. A tool the deployment has not registered "
+            "is skipped with a warning rather than failing the agent, so one "
+            "descriptor works across environments that register different tools."
+        ),
+    )
+
+    @field_validator("tool_ids", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        """Accept a comma-separated string as well as a list."""
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    max_tool_invocations: int | None = Field(
+        default=4,
+        gt=0,
+        description=(
+            "Tool calls allowed in one turn. Enforced between iterations of the "
+            "tool loop, where stopping still saves the next call."
+        ),
+    )
+    max_model_calls: int | None = Field(
+        default=4,
+        gt=0,
+        description="Model calls allowed in one turn, bounding the tool loop.",
+    )
 
 
 class ChatSettings(BaseModel):
@@ -463,6 +539,7 @@ class PlatformSettings(BaseSettings):
     llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
+    search: SearchSettings = Field(default_factory=SearchSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     mock_provider: MockProviderSettings = Field(default_factory=MockProviderSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)

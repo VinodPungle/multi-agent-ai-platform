@@ -53,6 +53,9 @@ services:
       PLATFORM_MOCK_PROVIDER__ENABLED: 'true'
       PLATFORM_FEATURES__STREAMING: 'true'
       PLATFORM_FEATURES__MEMORY: 'true'
+      # Internet search needs no API key, so it works on a fresh clone.
+      PLATFORM_FEATURES__SEARCH: 'true'
+      PLATFORM_SEARCH__PROVIDER: duckduckgo
     volumes:
       # Source is mounted so edits reload without a rebuild. Read-only: a
       # container must never write into the working tree.

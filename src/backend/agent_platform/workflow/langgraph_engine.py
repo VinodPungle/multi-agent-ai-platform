@@ -45,6 +45,8 @@ from langgraph.graph import END, START, StateGraph
 from agent_platform.exceptions.base import PlatformError, WorkflowError
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
+from agent_platform.tools.tool_executor import ToolExecutor
+from agent_platform.workflow.tool_loop import run_tool_loop
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import CompletionChunk
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
@@ -81,6 +83,15 @@ class LangGraphWorkflowEngine:
     has not been measured. Revisit when the graph is large enough to matter.
     """
 
+    def __init__(self, tool_executor: ToolExecutor | None = None) -> None:
+        """Create the engine.
+
+        Args:
+            tool_executor: Tool execution pipeline, passed to the agent node.
+                ``None`` disables tool calling.
+        """
+        self._tool_executor = tool_executor
+
     @property
     def engine_id(self) -> str:
         """Identifier reported in telemetry."""
@@ -106,7 +117,7 @@ class LangGraphWorkflowEngine:
             span.set_attribute("workflow.agent_id", agent.descriptor.agent_id)
             span.set_attribute("workflow.node_count", 1)
 
-            graph = self._compile(agent)
+            graph = self._compile(agent, self._tool_executor)
 
             try:
                 final_state: dict[str, Any] = await graph.ainvoke(
@@ -159,17 +170,26 @@ class LangGraphWorkflowEngine:
         return agent.stream(request, context)
 
     @staticmethod
-    def _compile(agent: Agent) -> Any:  # noqa: ANN401 - LangGraph's compiled type is not exported
+    def _compile(
+        agent: Agent,
+        tool_executor: ToolExecutor | None,
+    ) -> Any:  # noqa: ANN401 - LangGraph's compiled graph type is not exported
         """Build and compile the graph for ``agent``.
 
-        One node today. Adding a node is a `add_node` plus an edge here, and
-        nothing outside this method changes.
+        Still one node. The tool loop runs *inside* it rather than as
+        `agent → tools → agent` edges, which is a deliberate staging decision:
+        the loop is one tested algorithm shared with the direct engine, and
+        splitting it into nodes now would mean two implementations of it before
+        anything needs them to differ. When a second agent joins the graph, the
+        loop becomes edges and this node shrinks.
         """
 
         async def run_agent(state: _WorkflowState) -> _WorkflowState:
-            """Execute the agent, capturing a platform failure as state."""
+            """Execute the agent and its tool calls, capturing failures as state."""
             try:
-                result = await agent.execute(state["request"], state["context"])
+                result = await run_tool_loop(
+                    agent, state["request"], state["context"], tool_executor
+                )
             except PlatformError as error:
                 # Carried as state rather than raised, so the graph completes and
                 # a future error-handling node can inspect it. `execute` re-raises

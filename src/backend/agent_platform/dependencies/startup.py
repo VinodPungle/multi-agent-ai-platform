@@ -43,6 +43,7 @@ async def start_platform(container: ApplicationContainer) -> None:
         providers=list(container.provider_registry().keys()),
         models=list(container.model_registry().keys()),
         workflow_engine=container.workflow_engine().engine_id,
+        tools=list(container.tool_registry().keys()),
     )
 
 
@@ -74,6 +75,7 @@ def _initialisable(container: ApplicationContainer) -> tuple[Provider, ...]:
     return (
         container.prompt_provider(),
         container.memory_provider(),
+        container.search_provider(),
         *container.llm_providers(),
     )
 

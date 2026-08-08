@@ -20,10 +20,12 @@ would leave both untested until a real model first produced one.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncGenerator, Sequence
 from decimal import Decimal
 
 from agent_platform.telemetry.logging import get_logger
+from agent_platform.tools.internet_search_tool import INTERNET_SEARCH_TOOL_ID
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
 from agent_platform_sdk.dto.completion import (
@@ -32,7 +34,7 @@ from agent_platform_sdk.dto.completion import (
     CompletionResponse,
     TokenUsage,
 )
-from agent_platform_sdk.dto.message import Message
+from agent_platform_sdk.dto.message import Message, ToolCall
 from agent_platform_sdk.dto.model import ModelDescriptor, ModelPricing
 from agent_platform_sdk.types.enums import Capability, HealthStatus, MessageRole
 
@@ -46,6 +48,11 @@ _logger = get_logger(__name__)
 _CHARACTERS_PER_TOKEN = 4
 
 _GREETINGS = frozenset({"hi", "hello", "hey", "yo", "good morning", "good evening"})
+
+#: Words that make this mock request a search. A real model decides from the
+#: tool's description; a deterministic stand-in needs a rule, and a rule the
+#: reader can see beats one hidden in a heuristic.
+_SEARCH_TRIGGERS = ("search", "look up", "find out", "latest", "current", "news about")
 
 
 class MockLLMProvider:
@@ -123,12 +130,31 @@ class MockLLMProvider:
         request: CompletionRequest,
         context: ExecutionContext,
     ) -> CompletionResponse:
-        """Return a complete answer.
+        """Return a complete answer, or a request to call a tool.
 
         The whole answer is assembled and returned at once; the per-chunk delay
         applies to streaming only.
         """
         del context  # Attribution is the gateway's job; nothing here needs it.
+
+        tool_call = self._maybe_tool_call(request)
+        if tool_call is not None:
+            # A tool-calling turn: no prose, just the request. The runtime runs
+            # the tool and calls back with the result, and `_compose_answer`
+            # then produces the grounded reply.
+            return CompletionResponse(
+                message=Message(role=MessageRole.ASSISTANT, content="", tool_calls=(tool_call,)),
+                model_id=request.model_id,
+                provider_id=self._provider_id,
+                usage=TokenUsage(
+                    prompt_tokens=self._estimate_tokens(self._prompt_text(request)),
+                    completion_tokens=8,
+                ),
+                estimated_cost=Decimal(0),
+                finish_reason="tool_calls",
+                provider_metadata={"simulated": "true"},
+                model_metadata={"model": self._model_id, "kind": "mock"},
+            )
 
         content = self._compose_answer(request)
         usage = TokenUsage(
@@ -224,6 +250,58 @@ class MockLLMProvider:
             ),
         )
 
+    # -- Tool calling ------------------------------------------------------
+
+    def _maybe_tool_call(self, request: CompletionRequest) -> ToolCall | None:
+        """Decide whether this turn should request a tool.
+
+        Deterministic by design: a mock that chose randomly would make every
+        end-to-end tool test flaky. The rule is narrow — the agent must actually
+        have the tool, the user's words must ask for a lookup, and no tool result
+        may already be present.
+
+        The last condition is what terminates the loop. Without it the mock would
+        request the same search forever, and the iteration ceiling would be the
+        only thing stopping it.
+        """
+        if INTERNET_SEARCH_TOOL_ID not in request.tool_ids:
+            return None
+
+        if any(message.role is MessageRole.TOOL for message in request.messages):
+            return None
+
+        prompt = (self._last_user_message(request.messages) or "").lower()
+        if not any(trigger in prompt for trigger in _SEARCH_TRIGGERS):
+            return None
+
+        return ToolCall(
+            call_id="mock-call-1",
+            tool_id=INTERNET_SEARCH_TOOL_ID,
+            arguments=json.dumps({"query": self._search_query(prompt), "max_results": 3}),
+        )
+
+    @staticmethod
+    def _search_query(prompt: str) -> str:
+        """Strip the trigger phrase so the query is what was actually asked about.
+
+        Trigger *phrases*, not words. Removing only "search" from "search for the
+        eiffel tower" leaves "for the eiffel tower", which matches nothing —
+        found by running it against the real API, not by reading the code.
+        """
+        query = prompt.strip()
+
+        for trigger in _SEARCH_TRIGGERS:
+            for phrase in (f"{trigger} for", f"{trigger} about", trigger):
+                if query.startswith(phrase):
+                    query = query[len(phrase) :]
+                    break
+            else:
+                continue
+            break
+
+        cleaned = " ".join(query.split()).strip(" ?.!,")
+        return cleaned or prompt.strip(" ?.!,")
+
     # -- Answer composition ------------------------------------------------
 
     @staticmethod
@@ -254,6 +332,10 @@ class MockLLMProvider:
         Anything else      Markdown: heading, prose, list, code block
         =================  ==========================================
         """
+        tool_results = [message for message in request.messages if message.role is MessageRole.TOOL]
+        if tool_results:
+            return self._compose_grounded_answer(request, tool_results[-1].content)
+
         last_user_message = self._last_user_message(request.messages)
 
         if last_user_message is None:
@@ -298,6 +380,44 @@ class MockLLMProvider:
             f"```\n\n"
             f"Swapping this provider for Azure AI Foundry changes configuration only — "
             f"no caller of the LLM Gateway is aware of which provider answered."
+        )
+
+    def _compose_grounded_answer(self, request: CompletionRequest, tool_output: str) -> str:
+        """Answer using what the tool returned.
+
+        Cites every result. A grounded answer whose sources the reader cannot
+        check is indistinguishable from an ungrounded one, which is the failure
+        mode search exists to remove.
+        """
+        try:
+            payload = json.loads(tool_output)
+            results = payload.get("results") or []
+        except (json.JSONDecodeError, AttributeError):
+            results = []
+
+        question = self._last_user_message(request.messages) or "your question"
+
+        if not results:
+            return (
+                f"I searched for information about *{question}* and found nothing usable. "
+                "The mock provider generated this reply; the search itself ran through the "
+                "real tool pipeline."
+            )
+
+        citations = "\n".join(
+            f"{index + 1}. [{result.get('title', 'Untitled')}]({result.get('url', '')})"
+            f" — {result.get('snippet', '')}"
+            for index, result in enumerate(results)
+        )
+
+        return (
+            f"## What the search found\n\n"
+            f"You asked about *{question}*. I called the **internet-search** tool through "
+            f"the runtime's tool pipeline and it returned {len(results)} result(s):\n\n"
+            f"{citations}\n\n"
+            f"This answer was composed by the mock provider, but the search was real: the "
+            f"runtime resolved the tool, enforced its timeout and retry policy, and returned "
+            f"the results as a structured `ToolResult`."
         )
 
     @staticmethod
