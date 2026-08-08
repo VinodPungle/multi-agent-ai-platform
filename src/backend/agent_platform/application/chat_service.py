@@ -20,6 +20,7 @@ What changed when the runtime arrived, and why it matters
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 
 from agent_platform.domain.chat import (
@@ -28,6 +29,7 @@ from agent_platform.domain.chat import (
     ChatErrorEvent,
     ChatStartedEvent,
     ChatStreamEvent,
+    ChatToolEvent,
     ChatTurn,
     ConversationHistory,
 )
@@ -37,7 +39,7 @@ from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import TokenUsage
-from agent_platform_sdk.dto.message import Message
+from agent_platform_sdk.dto.message import Message, ToolCall
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_sdk.types.enums import MessageRole
 from agent_platform_shared import new_message_id
@@ -219,6 +221,16 @@ class ChatService:
 
         try:
             async for chunk in self._runtime.stream(turn):
+                # A chunk carrying tool calls and no text is the loop announcing
+                # what it is about to run, not content. Forwarded as its own
+                # event so the client can say "searching…" instead of showing an
+                # empty bubble for several seconds.
+                for call in chunk.tool_calls:
+                    yield ChatToolEvent(
+                        tool_id=call.tool_id,
+                        summary=_summarise_tool_call(call),
+                    )
+
                 if chunk.delta:
                     chunks.append(chunk.delta)
                     yield ChatDeltaEvent(delta=chunk.delta)
@@ -301,3 +313,26 @@ class ChatService:
             kept.pop()
 
         return tuple(kept)
+
+
+def _summarise_tool_call(call: ToolCall) -> str:
+    """Render a tool call as one short line a user can read.
+
+    Arguments arrive as a raw JSON string that may be malformed — models emit
+    invalid JSON often enough that parsing has to be defensive. A summary that
+    raised would fail a turn to render a caption.
+
+    Only the recognised, displayable fields are surfaced. Echoing arbitrary
+    arguments into the UI would eventually put something in front of a user that
+    was never meant for them.
+    """
+    try:
+        arguments = json.loads(call.arguments) if call.arguments.strip() else {}
+    except json.JSONDecodeError:
+        return ""
+
+    if not isinstance(arguments, dict):
+        return ""
+
+    query = arguments.get("query")
+    return str(query)[:200] if isinstance(query, str) else ""

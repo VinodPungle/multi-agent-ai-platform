@@ -339,3 +339,71 @@ describe('Error handling', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach/i);
   });
 });
+
+describe('Tool visibility', () => {
+  /**
+   * A searching turn spends a whole model call plus the search before the first
+   * character arrives. Without this the user watches a blank bubble, which
+   * looks exactly like a hang — and afterwards, a searched answer looks
+   * identical to an invented one.
+   */
+  const SEARCH_EVENTS = [
+    [
+      'started',
+      { type: 'started', conversation_id: 'c1', message_id: 'm1', model_id: 'mock-echo' },
+    ],
+    ['tool', { type: 'tool', tool_id: 'internet-search', summary: 'eiffel tower' }],
+    ['delta', { type: 'delta', delta: 'It is ' }],
+    ['delta', { type: 'delta', delta: 'a tower.' }],
+    [
+      'completed',
+      {
+        type: 'completed',
+        message_id: 'm1',
+        content: 'It is a tower.',
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+        finish_reason: 'stop',
+      },
+    ],
+  ] as const;
+
+  it('shows which tool the agent used, and what it asked', async () => {
+    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    renderWithProviders(<ChatPage />);
+
+    await send('search for the eiffel tower');
+
+    expect(await screen.findByText(/searched the web/i)).toBeInTheDocument();
+    expect(screen.getByText('eiffel tower')).toBeInTheDocument();
+  });
+
+  it('keeps the trace visible after the answer arrives', async () => {
+    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    renderWithProviders(<ChatPage />);
+
+    await send('search for the eiffel tower');
+
+    expect(await screen.findByText('It is a tower.')).toBeInTheDocument();
+    expect(screen.getByText(/searched the web/i)).toBeInTheDocument();
+  });
+
+  it('does not add the tool summary to the answer text', async () => {
+    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    renderWithProviders(<ChatPage />);
+
+    await send('search for the eiffel tower');
+
+    const answer = await screen.findByText('It is a tower.');
+    expect(answer.textContent).not.toContain('eiffel tower');
+  });
+
+  it('shows no trace for a turn that used no tools', async () => {
+    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(ANSWER_EVENTS)));
+    renderWithProviders(<ChatPage />);
+
+    await send('hello');
+
+    await screen.findByText('Hello world');
+    expect(screen.queryByText(/searched the web/i)).not.toBeInTheDocument();
+  });
+});

@@ -33,6 +33,7 @@ __all__ = [
     "ChatEventType",
     "ChatStartedEvent",
     "ChatStreamEvent",
+    "ChatToolEvent",
     "ChatTurn",
     "ConversationHistory",
 ]
@@ -46,6 +47,7 @@ class ChatEventType(StrEnum):
     """
 
     STARTED = "started"
+    TOOL = "tool"
     DELTA = "delta"
     COMPLETED = "completed"
     ERROR = "error"
@@ -74,6 +76,33 @@ class ChatStartedEvent(BaseModel):
     #
     # Provider attribution is available where it is actually known: on the
     # non-streaming response, and in every log record and span for the turn.
+
+
+class ChatToolEvent(BaseModel):
+    """The agent decided to use a tool, and is waiting on it.
+
+    Emitted between `started` and the first `delta`, because that gap is
+    otherwise unexplained silence: a searching turn spends a whole model call
+    plus the search before a single character of the answer appears, and a user
+    watching a blank bubble has no way to tell that from a hang.
+
+    It also makes the platform's behaviour legible. An answer that quietly used
+    a search looks identical to one the model invented, and those two deserve
+    very different amounts of trust.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal[ChatEventType.TOOL] = ChatEventType.TOOL
+    tool_id: str = Field(description="Tool the agent invoked.")
+    summary: str = Field(
+        default="",
+        description=(
+            "Short human-readable description of what was asked of the tool — "
+            "for search, the query. Rendered directly, so it carries no "
+            "arguments a user should not see."
+        ),
+    )
 
 
 class ChatDeltaEvent(BaseModel):
@@ -136,7 +165,9 @@ class ChatErrorEvent(BaseModel):
 
 
 #: Everything a streamed turn can emit. Discriminated on `type`.
-ChatStreamEvent = ChatStartedEvent | ChatDeltaEvent | ChatCompletedEvent | ChatErrorEvent
+ChatStreamEvent = (
+    ChatStartedEvent | ChatToolEvent | ChatDeltaEvent | ChatCompletedEvent | ChatErrorEvent
+)
 
 
 class ChatTurn(BaseModel):

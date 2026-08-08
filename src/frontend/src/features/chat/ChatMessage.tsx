@@ -9,8 +9,13 @@
  */
 
 import { MarkdownMessage } from '@/features/chat/MarkdownMessage';
-import type { ChatMessageView } from '@/features/chat/useChat';
+import type { ChatMessageView, ToolActivity } from '@/features/chat/useChat';
 import { cn } from '@/utils/cn';
+
+/** Human-readable names for the tools a user may see. */
+const toolLabels: Record<string, string> = {
+  'internet-search': 'Searched the web',
+};
 
 interface ChatMessageProps {
   message: ChatMessageView;
@@ -51,6 +56,10 @@ export function ChatMessage({ message }: ChatMessageProps) {
           </p>
         ) : (
           <>
+            {message.tools && message.tools.length > 0 && (
+              <ToolTrace tools={message.tools} pending={message.status === 'streaming'} />
+            )}
+
             {message.content ? (
               <MarkdownMessage content={message.content} />
             ) : (
@@ -77,6 +86,47 @@ export function ChatMessage({ message }: ChatMessageProps) {
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * What the agent did before answering.
+ *
+ * Shown above the answer and kept there afterwards. During the pause it
+ * explains several seconds of silence that would otherwise be indistinguishable
+ * from a hang; afterwards it is what separates a grounded answer from an
+ * invented one, which is worth more than the transient reassurance.
+ */
+function ToolTrace({ tools, pending }: { tools: readonly ToolActivity[]; pending: boolean }) {
+  return (
+    <ul
+      aria-label="Tools used for this answer"
+      className="mb-2 flex flex-col gap-1 border-b border-border pb-2"
+    >
+      {tools.map((tool, index) => (
+        <li
+          key={`${tool.toolId}-${index}`}
+          className="flex items-center gap-2 text-xs text-muted-foreground"
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              pending ? 'animate-pulse bg-primary' : 'bg-muted-foreground',
+            )}
+          />
+          <span className="truncate">
+            {toolLabels[tool.toolId] ?? tool.toolId}
+            {tool.summary && (
+              <>
+                {': '}
+                <span className="italic">{tool.summary}</span>
+              </>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

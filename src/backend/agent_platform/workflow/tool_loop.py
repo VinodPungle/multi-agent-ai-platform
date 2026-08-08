@@ -279,6 +279,12 @@ async def stream_tool_loop(
             )
             return
 
+        # Announce the tools before running them. This is the only signal the
+        # consumer gets during a gap that can run to several seconds — a whole
+        # model call plus the tool — and an unexplained pause is indistinguishable
+        # from a hang. Empty delta, so nothing is appended to the answer.
+        yield CompletionChunk(delta="", tool_calls=tuple(calls))
+
         if max_tool_calls is not None and tool_invocations + len(calls) > max_tool_calls:
             exchange = (
                 *exchange,

@@ -21,6 +21,13 @@ import { regenerateChat, streamChat, type ChatStreamEvent } from '@/api/chat';
 
 export type MessageStatus = 'complete' | 'streaming' | 'stopped' | 'failed';
 
+/** A tool the agent used while producing an answer. */
+export interface ToolActivity {
+  toolId: string;
+  /** What was asked of it — for search, the query. May be empty. */
+  summary: string;
+}
+
 export interface ChatMessageView {
   id: string;
   role: 'user' | 'assistant';
@@ -28,6 +35,14 @@ export interface ChatMessageView {
   status: MessageStatus;
   /** Present when the turn failed, for display beside the message. */
   error?: string;
+  /**
+   * Tools used for this answer, in the order they ran.
+   *
+   * Kept after the answer arrives rather than cleared: "this was searched" is
+   * exactly as useful once the text is on screen, because it is what separates
+   * a grounded answer from an invented one.
+   */
+  tools?: readonly ToolActivity[];
 }
 
 export interface ChatState {
@@ -87,6 +102,24 @@ export function useChat() {
           switch (event.type) {
             case 'started':
               setConversationId(event.conversation_id);
+              break;
+            case 'tool':
+              // Recorded against the message, not shown as a transient toast:
+              // the fact that an answer was searched stays relevant after the
+              // answer arrives.
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantId
+                    ? {
+                        ...message,
+                        tools: [
+                          ...(message.tools ?? []),
+                          { toolId: event.tool_id, summary: event.summary },
+                        ],
+                      }
+                    : message,
+                ),
+              );
               break;
             case 'delta':
               receivedAnything = true;

@@ -28,6 +28,7 @@ from agent_platform.configuration.settings import (
     LoggingSettings,
     MockProviderSettings,
     PlatformSettings,
+    SearchSettings,
     ServerSettings,
     TelemetrySettings,
 )
@@ -335,3 +336,74 @@ class TestHealthReflectsRegisteredComponents:
         names = {component["name"] for component in body["report"]["components"]}
         assert "session-memory" in names
         assert "mock" in names
+
+
+class TestToolVisibility:
+    """The client is told when the agent used a tool.
+
+    A searching turn spends a whole model call plus the search before the first
+    character of the answer. Without an event in that gap the browser shows a
+    blank bubble, which is indistinguishable from a hang — and afterwards, an
+    answer that quietly used a search looks identical to one the model invented.
+    """
+
+    @pytest.fixture
+    def searching_settings(self, chat_settings: PlatformSettings) -> PlatformSettings:
+        """Chat settings with search enabled and the agent allowed to use it."""
+        return chat_settings.model_copy(
+            update={
+                "features": chat_settings.features.model_copy(update={"search": True}),
+                "search": SearchSettings(provider="mock"),
+                "agent": chat_settings.agent.model_copy(update={"tool_ids": ("internet-search",)}),
+            }
+        )
+
+    @pytest.fixture
+    def searching_client(self, searching_settings: PlatformSettings) -> Iterator[TestClient]:
+        with TestClient(create_app(searching_settings)) as client:
+            yield client
+
+    def test_a_tool_event_precedes_the_answer(self, searching_client: TestClient) -> None:
+        response = searching_client.post(
+            f"{CHAT}/messages/stream",
+            json={"message": "search for the eiffel tower"},
+        )
+
+        names = [name for name, _ in parse_sse(response.text)]
+
+        assert "tool" in names
+        assert names.index("tool") < names.index("delta")
+
+    def test_the_tool_event_names_the_tool_and_the_query(
+        self, searching_client: TestClient
+    ) -> None:
+        response = searching_client.post(
+            f"{CHAT}/messages/stream",
+            json={"message": "search for the eiffel tower"},
+        )
+
+        tool = next(payload for name, payload in parse_sse(response.text) if name == "tool")
+
+        assert tool["tool_id"] == "internet-search"
+        assert "eiffel" in str(tool["summary"]).lower()
+
+    def test_a_turn_without_tools_emits_no_tool_event(self, chat_client: TestClient) -> None:
+        """The common path must not acquire a spurious caption."""
+        response = chat_client.post(f"{CHAT}/messages/stream", json={"message": "hello"})
+
+        names = [name for name, _ in parse_sse(response.text)]
+
+        assert "tool" not in names
+
+    def test_the_tool_event_does_not_pollute_the_answer(self, searching_client: TestClient) -> None:
+        """It carries no text, so deltas must still reassemble exactly."""
+        response = searching_client.post(
+            f"{CHAT}/messages/stream",
+            json={"message": "search for the eiffel tower"},
+        )
+
+        events = parse_sse(response.text)
+        deltas = "".join(str(payload["delta"]) for name, payload in events if name == "delta")
+        completed = next(payload for name, payload in events if name == "completed")
+
+        assert deltas == completed["content"]

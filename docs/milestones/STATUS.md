@@ -800,6 +800,79 @@ provider that started the timer twice.
 
 ---
 
+## Follow-up — the chat UI answers as an agent ✅
+
+Raised on testing: chat should visibly be an *agent* that searches or recalls
+when it needs to, not a model answering directly.
+
+Two things were missing, and only one of them was code.
+
+### The agent was never told it could search
+
+The system prompt described tone and Markdown and said nothing about tools. The
+tool was declared in the API payload, so the model would use it when explicitly
+asked — "search the internet and tell me…" — and otherwise answer from training,
+which is what looked like a plain LLM.
+
+Prompt v1.1 says when to search (anything dated, named, or asked for), when not
+to (definitions, arithmetic, code, the conversation so far), and to **cite
+sources inline** as Markdown links next to the claim they support. It also
+states that the conversation so far is provided, so the agent stops asking for
+what it has already been told.
+
+A prompt is a versioned asset, so this was a file and a version bump — no code
+change, which is the point of `CLAUDE.md`'s rule against prompts in Python.
+
+### The user could not see any of it
+
+A searching turn spends a whole model call plus the search before the first
+character appears. The browser showed a blank bubble, indistinguishable from a
+hang — and afterwards, an answer that quietly used a search looked identical to
+one the model invented.
+
+A `tool` SSE event now sits between `started` and the first `delta`, carrying
+the tool id and the query. The UI renders it above the answer and **keeps it
+there**: "this was searched" matters more once the text is on screen than during
+the wait.
+
+The summary is built defensively — models emit malformed JSON often enough that
+a caption must never fail a turn — and only recognised fields are surfaced,
+rather than echoing arbitrary tool arguments at a user.
+
+### Verification
+
+```
+ruff / black / mypy --strict ... clean (142 files)
+pytest ....................... 626 passed   (622 before)
+vitest ....................... 74 passed    (70 before)
+
+Live, against Tavily + FW-Kimi-K3, asking a question with no instruction
+to search:
+
+  [TOOL] internet-search — "latest stable Python version release date"
+  159 deltas, cited inline:
+
+  "The latest stable version is Python 3.14, first released on October 7, 2025
+   ([Python developer guide](https://devguide.python.org/versions)). The most
+   recent patch release is 3.14.7 (August 5, 2026), per endoflife.date."
+```
+
+The agent chose to search. That is the behaviour that was asked for, and it also
+retires the previous entry's caveat that Tavily had never been called live.
+
+### Known limitations
+
+1. **Tool *results* are not shown**, only the request. Sources reach the user
+   through the model's inline citations, which depends on it following the
+   prompt. A structured source list would not.
+2. **The trace shows what was asked, not what came back**, so a search that
+   returned nothing looks the same as one that grounded the whole answer.
+3. **Whether to search is the model's judgement.** It will sometimes search
+   needlessly and sometimes answer stale. The prompt biases it; nothing enforces
+   it.
+
+---
+
 ## Next: Milestone 06 — Infrastructure as Code
 
 Not started. Awaiting approval before any work begins.

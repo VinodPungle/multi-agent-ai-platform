@@ -52,6 +52,12 @@ export const chatStartedEventSchema = z.object({
   model_id: z.string(),
 });
 
+export const chatToolEventSchema = z.object({
+  type: z.literal('tool'),
+  tool_id: z.string(),
+  summary: z.string().optional().default(''),
+});
+
 export const chatDeltaEventSchema = z.object({
   type: z.literal('delta'),
   delta: z.string(),
@@ -76,12 +82,14 @@ export const chatErrorEventSchema = z.object({
 
 export const chatStreamEventSchema = z.discriminatedUnion('type', [
   chatStartedEventSchema,
+  chatToolEventSchema,
   chatDeltaEventSchema,
   chatCompletedEventSchema,
   chatErrorEventSchema,
 ]);
 
 export type ChatStartedEvent = z.infer<typeof chatStartedEventSchema>;
+export type ChatToolEvent = z.infer<typeof chatToolEventSchema>;
 export type ChatDeltaEvent = z.infer<typeof chatDeltaEventSchema>;
 export type ChatCompletedEvent = z.infer<typeof chatCompletedEventSchema>;
 export type ChatErrorEvent = z.infer<typeof chatErrorEventSchema>;
