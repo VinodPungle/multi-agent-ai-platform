@@ -168,7 +168,7 @@ jobs:
       # container CVEs actually come from.
 
       - name: Scan the backend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: agent-platform-backend:${{ inputs.image-tag }}
           format: sarif
@@ -176,7 +176,7 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
       - name: Scan the frontend image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: agent-platform-frontend:${{ inputs.image-tag }}
           format: sarif
@@ -191,7 +191,7 @@ jobs:
           category: container-images
 
       - name: Fail on high or critical image findings
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: agent-platform-backend:${{ inputs.image-tag }}
           format: table

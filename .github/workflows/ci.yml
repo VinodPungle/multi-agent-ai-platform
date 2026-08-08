@@ -83,11 +83,12 @@ jobs:
       - name: Lint Bicep templates
         # `--stdout` discards the compiled ARM output: this step checks the
         # templates are valid, it does not produce a deployment artefact.
+        # `find -exec` rather than a loop over its output: word splitting on a
+        # path containing a space would silently lint the wrong thing, or
+        # nothing. shellcheck SC2044, reported by actionlint on the runner.
         run: |
-          for template in $(find infra/bicep -name '*.bicep' -not -path '*/modules/*'); do
-            echo "Linting ${template}"
-            bicep build "${template}" --stdout > /dev/null
-          done
+          find infra/bicep -name '*.bicep' -not -path '*/modules/*' \
+            -exec sh -c 'echo "Linting $1"; bicep build "$1" --stdout > /dev/null' _ {} \;
 
       - name: Validate environment parameter files
         # Every environment, not just the default one. A `.bicepparam` that
@@ -109,9 +110,9 @@ jobs:
         # `needs` reference or a wrong action input — all of which otherwise
         # fail at the least useful moment, mid-run, on the branch that triggered
         # them.
+        # No inputs: the action takes only `entryPoint` and `args`, and it
+        # already fails the step when it reports anything.
         uses: rhysd/actionlint@v1.7.7
-        with:
-          fail-on-error: true
 
       - name: Validate the pre-flight scripts
         # They run before every provision. A syntax error in one is discovered
@@ -140,7 +141,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Scan the filesystem for vulnerabilities and secrets
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
@@ -158,7 +159,7 @@ jobs:
           category: filesystem
 
       - name: Fail on high or critical findings
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: fs
           scanners: vuln,secret
