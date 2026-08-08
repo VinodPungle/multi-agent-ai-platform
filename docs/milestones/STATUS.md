@@ -12,8 +12,8 @@ acceptance criterion is verified, not merely implemented.
 | 04 | [Internet Search, Tool Framework](./milestone-04-internet-search-tool-framework.md) | ✅ **Complete** | 2026-08-08 |
 | 05 | [Azure AI Foundry, FW-Kimi-K3](./milestone-05-azure-ai-foundry-gemma4.md) | ✅ **Complete** | 2026-08-08 |
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⚠️ **Complete, not provisioned** | 2026-08-08 |
-| 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⬜ Next | — |
-| 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Not started | — |
+| 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⚠️ **CI green, CD unrun** | 2026-08-08 |
+| 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⬜ Next | — |
 | 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Not started | — |
 
 ---
@@ -975,6 +975,102 @@ first `azd up` surfaces something.
 
 ---
 
-## Next: Milestone 07 — DevSecOps and CI/CD
+## Milestone 07 — DevSecOps and CI/CD ⚠️
+
+CI is green on real runners, verified over five runs. CD is written and
+unexecuted — it deploys to Azure, which nothing has provisioned yet.
+
+### The finding that mattered most
+
+**CI had never run. Not once, across six milestones.**
+
+Its triggers were `push` to `main` and pull requests to `main`. Every commit in
+this project's history has been on a long-lived feature branch with no pull
+request, so `gh run list` returned nothing at all. Six milestones of "CI passes"
+meant "the same commands passed on one Windows laptop".
+
+That is precisely the gap CI exists to close, and it had been open the entire
+time. Triggers now include feature branches.
+
+### Acceptance criteria
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Pull requests execute CI | ✅ | Five runs on a real runner; the last fully green |
+| Docker images build | ✅ | Built, started and probed on `/live` and `/healthz` in CI |
+| Bicep validates | ✅ | Templates and all four parameter files, in CI |
+| Security scans execute | ✅ | Trivy filesystem and both images; CodeQL configured |
+| Images publish to ACR | ⚠️ | Written and unrun — there is no registry until something is provisioned |
+| Deployment supports 4 environments | ⚠️ | Written and unrun, for the same reason |
+
+### What running it actually found
+
+Five runs. Every one found something that no amount of local checking had.
+
+| # | Finding | Why local checks missed it |
+| --- | --- | --- |
+| 1 | **`aquasecurity/trivy-action@0.28.0` does not exist** — the tags carry a `v` prefix. Present since Milestone 01, so every security scan the repository claimed to run was a step that could not resolve. | Nothing evaluates an action reference until a runner tries to |
+| 2 | `rhysd/actionlint` has no `fail-on-error` input | Mine, from the same commit |
+| 3 | **SC2044**, a `for` loop over `find` output | actionlint passed locally and failed on the runner: the runner has shellcheck, this machine does not, so the local check was quietly weaker |
+| 4 | Trivy's own install script failed on the runner | It is fetched at run time from a moving branch; nothing here could pin it. Replaced with the published image |
+| 5 | SC2086, and CodeQL refusing two SARIF runs under one category | Only visible on a runner |
+| 6 | **35 image vulnerabilities, 2 CRITICAL** — CVE-2026-31789, an OpenSSL heap overflow, in the nginx base | The images had never been scanned, because of finding 1 |
+
+The last is the one to remember. A security gate that cannot resolve its own
+action reports nothing and looks identical to a gate that found nothing.
+
+### What was built
+
+Quality gates and container builds are reusable workflows called by both CI and
+CD, so a release cannot pass checks a pull request would fail. Duplicated they
+drift, and the drift always favours the release pipeline — that is the one under
+time pressure.
+
+`cd.yml` provisions, publishes and deploys one environment, then smoke tests it
+against `/ready` rather than `/live`. Liveness passes before the platform can
+answer, so a liveness-only check produces a green deployment that serves errors,
+and nobody investigates a green pipeline.
+
+Authentication is OIDC federated credentials throughout — no service principal
+secret exists in this repository. The same argument that removed API keys from
+the application, applied to the pipeline.
+
+Deployment is manual. This platform bills per model call and per provisioned
+throughput, and an accidental production deployment is not recoverable by
+reverting a commit.
+
+### Verification performed
+
+```
+CI run 1 ... 3 failures: unresolvable action ×2, shellcheck SC2044
+CI run 2 ... 2 failures: Trivy install script, then its fallout
+CI run 3 ... 2 failures: SC2086, duplicate SARIF category
+CI run 4 ... 1 failure:  the image gate, finding real CVEs
+CI run 5 ... ALL GREEN — quality, images, infrastructure, security
+
+actionlint ... clean on all five workflows
+pytest ....... 626 passed, on the runner as well as locally
+```
+
+### Known limitations
+
+1. **CD has never run.** It needs provisioned Azure resources, federated
+   credentials and GitHub Environments — none of which exist yet. Given this
+   project's record, expect the first run to find something.
+2. **Federated credentials, secrets, environments and branch protection are all
+   manual one-time setup.** Documented in `docs/runbooks/ci-cd.md`; none of it
+   can be committed.
+3. **CodeQL has not run** — it triggers on `main` and pull requests, and there
+   has been neither.
+4. **`main` is unprotected**, so `CI` is not yet a required check.
+5. **`apt-get upgrade` in the image build means two builds of one commit can
+   differ.** Deliberate: a reproducible build of a vulnerable image is not worth
+   much. It does weaken "the image that was verified is the image that ships"
+   for anything rebuilt later.
+6. **No deploy-on-merge, no blue/green, no canary, no release automation.**
+
+---
+
+## Next: Milestone 08 — Production Hardening and Operational Readiness
 
 Not started. Awaiting approval before any work begins.
