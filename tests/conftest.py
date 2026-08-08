@@ -27,6 +27,7 @@ from agent_platform.agents.chat_agent import ChatAgent
 from agent_platform.api.app import create_app
 from agent_platform.configuration.settings import (
     AppSettings,
+    ChatSettings,
     Environment,
     LoggingSettings,
     PlatformSettings,
@@ -73,6 +74,11 @@ __all__ = [
     "isolated_environment",
     "test_settings",
 ]
+
+#: Anchored to this file, not the working directory. `isolated_environment`
+#: chdirs every test into a temporary directory, so any relative path resolves
+#: somewhere empty.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeClock:
@@ -138,6 +144,12 @@ def test_settings() -> PlatformSettings:
     Telemetry is disabled: installing a global tracer provider per test leaks
     state across the session and the OpenTelemetry SDK refuses to replace one
     that is already set.
+
+    The prompts directory is an absolute path to the real ``prompts/`` tree.
+    The default is relative, so it resolved against whatever directory pytest
+    happened to run from — which loaded nothing, and left the suite asserting
+    that a platform holding no prompts was healthy and ready. It is not: every
+    agent turn resolves a prompt.
     """
     return PlatformSettings(
         app=AppSettings(
@@ -149,6 +161,7 @@ def test_settings() -> PlatformSettings:
         server=ServerSettings(cors_origins=("http://localhost:5173",)),
         logging=LoggingSettings(level="DEBUG", renderer="json"),
         telemetry=TelemetrySettings(enabled=False),
+        chat=ChatSettings(prompts_directory=str(REPOSITORY_ROOT / "prompts")),
     )
 
 

@@ -65,8 +65,8 @@ function OverviewPage() {
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">Platform overview</h1>
         <p className="max-w-2xl text-sm text-muted-foreground">
-          Enterprise Multi-Agent AI Platform. Chat runs against a mock provider with session memory;
-          Azure AI Foundry and Gemma 4 arrive in Milestone 05.
+          Enterprise Multi-Agent AI Platform. Chat runs through the agent runtime against the
+          configured provider, with session memory and internet search.
         </p>
       </div>
 

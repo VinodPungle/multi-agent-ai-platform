@@ -101,11 +101,33 @@ class FilePromptProvider:
         )
 
     async def health_check(self) -> ComponentHealth:
-        """Report how many assets are held.
+        """Report how many assets are held, and refuse to call zero healthy.
 
-        Always healthy: the assets are in memory, so there is nothing that can
-        become unreachable after startup.
+        Nothing here can become unreachable after startup — the assets are in
+        memory — so the only interesting question is whether any were found.
+
+        An empty registry is reported UNHEALTHY rather than healthy-with-zero.
+        Every agent turn resolves a prompt, so a provider holding nothing cannot
+        serve a single request; calling that healthy tells an operator the
+        platform is fine while every chat fails. It happened: a backend started
+        from the wrong working directory found no `prompts/` directory, showed a
+        green dashboard, and answered nothing.
+
+        The detail names the directory, because the cause is almost always that
+        `prompts_directory` is relative and the process started somewhere
+        unexpected.
         """
+        if not self._assets:
+            return ComponentHealth(
+                name=self._provider_id,
+                status=HealthStatus.UNHEALTHY,
+                detail=(
+                    f"No prompt assets found under '{self._root}'. Every agent turn "
+                    f"needs a prompt, so no request can be served. Check that the "
+                    f"process was started from the directory containing that path."
+                ),
+            )
+
         return ComponentHealth(
             name=self._provider_id,
             status=HealthStatus.HEALTHY,

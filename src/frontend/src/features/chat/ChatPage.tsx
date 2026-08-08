@@ -47,7 +47,7 @@ export function ChatPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Chat</h1>
           <p className="text-sm text-muted-foreground">
-            Answers come from the mock provider until Azure AI Foundry is connected in Milestone 05.
+            Answers come from the model this deployment is configured to use.
           </p>
         </div>
 

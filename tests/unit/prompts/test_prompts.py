@@ -20,6 +20,7 @@ from agent_platform.prompts.file_prompt_provider import FilePromptProvider
 from agent_platform.prompts.renderer import render_prompt
 from agent_platform_sdk.dto.prompt import PromptAsset, PromptVariable
 from agent_platform_sdk.interfaces.prompt_provider import PromptProvider
+from agent_platform_sdk.types.enums import HealthStatus
 
 pytestmark = pytest.mark.unit
 
@@ -73,12 +74,48 @@ class TestLoading:
         assert await provider.list_versions("anything") == ()
 
     async def test_a_missing_directory_is_not_a_startup_failure(self, tmp_path: Path) -> None:
-        """A deployment may legitimately carry no prompts; agents fail individually."""
+        """Startup survives so the failure is diagnosable, not a crash loop."""
         provider = FilePromptProvider(tmp_path / "does-not-exist")
 
         await provider.initialize()
 
-        assert (await provider.health_check()).status.value == "healthy"
+        assert await provider.list_versions("anything") == ()
+
+    async def test_an_empty_registry_reports_unhealthy(self, tmp_path: Path) -> None:
+        """Zero prompts is not healthy, however calmly it fails.
+
+        This previously reported HEALTHY, on the reasoning that a deployment may
+        legitimately carry no prompts. In practice it produced a fully green
+        dashboard on a platform that could not answer a single request: every
+        agent turn resolves a prompt, so a provider holding none serves nothing.
+
+        UNHEALTHY rather than DEGRADED, per the enum's own definition — degraded
+        still serves traffic. It also fails readiness, which correctly stops a
+        misconfigured container from receiving any.
+        """
+        provider = FilePromptProvider(tmp_path / "does-not-exist")
+        await provider.initialize()
+
+        health = await provider.health_check()
+
+        assert health.status is HealthStatus.UNHEALTHY
+
+    async def test_the_unhealthy_detail_names_the_directory(self, tmp_path: Path) -> None:
+        """The cause is nearly always a relative path and an unexpected CWD."""
+        missing = tmp_path / "does-not-exist"
+        provider = FilePromptProvider(missing)
+        await provider.initialize()
+
+        detail = (await provider.health_check()).detail or ""
+
+        assert str(missing) in detail
+
+    async def test_a_populated_registry_is_healthy(self, tmp_path: Path) -> None:
+        write(tmp_path, "greet.md", VALID)
+        provider = FilePromptProvider(tmp_path)
+        await provider.initialize()
+
+        assert (await provider.health_check()).status is HealthStatus.HEALTHY
 
 
 class TestMalformedFiles:

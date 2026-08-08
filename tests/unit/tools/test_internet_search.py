@@ -32,7 +32,7 @@ from agent_platform.tools.internet_search_tool import (
     InternetSearchTool,
 )
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
-from agent_platform_sdk.dto.search import SearchQuery
+from agent_platform_sdk.dto.search import SearchQuery, SearchResults
 from agent_platform_sdk.dto.tool import ToolInvocation
 from agent_platform_sdk.interfaces.search_provider import SearchProvider
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
@@ -271,9 +271,7 @@ class TestInternetSearchTool:
         """An agent that knows its tool is down can say so; an exception aborts the turn."""
 
         class BrokenProvider(MockSearchProvider):
-            async def search(
-                self, query: SearchQuery, context: ExecutionContext
-            ) -> Any:  # noqa: ANN401
+            async def search(self, query: SearchQuery, context: ExecutionContext) -> SearchResults:
                 message = "search backend unreachable"
                 raise ProviderError(message)
 

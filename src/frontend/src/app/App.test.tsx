@@ -204,14 +204,14 @@ describe('capabilities', () => {
     expect(screen.getAllByText('Disabled')).toHaveLength(5);
   });
 
-  it('shows which milestone delivers a disabled capability', async () => {
+  it('says a disabled capability is switched off, not unbuilt', async () => {
     stubApi();
 
     renderWithProviders(<App />);
 
-    // Streaming and memory both land in Milestone 02.
-    expect(await screen.findAllByText('Arrives in Milestone 02')).toHaveLength(2);
-    expect(screen.getByText('Arrives in Milestone 04')).toBeInTheDocument();
+    // Every capability has shipped, so an off flag is a deployment choice.
+    // Naming a milestone that has already passed reads as "broken".
+    expect(await screen.findAllByText('Disabled by configuration')).toHaveLength(5);
   });
 
   it('degrades gracefully when the info endpoint fails', async () => {
