@@ -47,6 +47,7 @@ __all__ = [
     "MemorySettings",
     "MockProviderSettings",
     "PlatformSettings",
+    "ResearchAgentSettings",
     "SearchSettings",
     "ServerSettings",
     "TelemetrySettings",
@@ -599,6 +600,87 @@ class AgentSettings(BaseModel):
     )
 
 
+class ResearchAgentSettings(BaseModel):
+    """The research specialist a coordinator can delegate to.
+
+    A second agent, and the point of it is how little it needed: no new class,
+    no runtime change. `ChatAgent` is generic because an agent's behaviour lives
+    in its descriptor and its prompt, so a specialist is configuration plus a
+    prompt asset (`architecture.md` §74).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Register the research agent and let the chat agent delegate to it. "
+            "Off by default: a second agent doubles the model calls a request "
+            "can make, and that should be a decision rather than a default."
+        ),
+    )
+    agent_id: str = Field(default="research-agent", min_length=1)
+    prompt_id: str = Field(default="research-agent-system", min_length=1)
+    prompt_version: str | None = Field(default=None)
+
+    provider_id: str = Field(
+        default="",
+        description=(
+            "Provider for this agent. Empty inherits the chat agent's, which is "
+            "the common case; setting it is how one agent uses a cheaper or "
+            "stronger model than another."
+        ),
+    )
+    model_id: str = Field(
+        default="",
+        description="Model for this agent. Empty inherits the chat agent's.",
+    )
+    temperature: float | None = Field(
+        default=0.1,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Lower than the chat agent's. Research answers are summaries of "
+            "found evidence, and creativity there is indistinguishable from "
+            "invention."
+        ),
+    )
+    max_output_tokens: int | None = Field(default=None, gt=0)
+
+    tool_ids: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=("internet-search",),
+        description="Tools the specialist may call. It searches; it cannot delegate.",
+    )
+
+    max_tool_invocations: int = Field(default=4, gt=0)
+    max_model_calls: int = Field(default=4, gt=0)
+
+    max_delegation_depth: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description=(
+            "How many agents deep one user request may go. Two allows a "
+            "coordinator to consult a specialist. Raising it multiplies the "
+            "worst-case cost of a single request, and a cycle costs that much "
+            "before anything stops it."
+        ),
+    )
+
+    @field_validator("tool_ids", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        """Accept a comma-separated string as well as a list.
+
+        `NoDecode` above is required, not cosmetic: for a collection field
+        pydantic-settings attempts `json.loads` on the raw environment value
+        before any validator runs, and raises when that fails.
+        """
+        if isinstance(value, str):
+            return tuple(item.strip() for item in value.split(",") if item.strip())
+        return value
+
+
 class ChatSettings(BaseModel):
     """Chat behaviour that is a deployment decision rather than a code one."""
 
@@ -709,6 +791,7 @@ class PlatformSettings(BaseSettings):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     mock_provider: MockProviderSettings = Field(default_factory=MockProviderSettings)
     azure_foundry: AzureFoundrySettings = Field(default_factory=AzureFoundrySettings)
+    research_agent: ResearchAgentSettings = Field(default_factory=ResearchAgentSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
     features: FeatureFlagSettings = Field(default_factory=FeatureFlagSettings)
 

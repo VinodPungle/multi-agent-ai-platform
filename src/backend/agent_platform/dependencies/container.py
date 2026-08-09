@@ -13,6 +13,8 @@ is covered directly by `tests/unit/dependencies/test_container.py`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from dependency_injector import containers, providers
 
 from agent_platform.agents.chat_agent import ChatAgent
@@ -42,6 +44,7 @@ from agent_platform.search.duckduckgo_search_provider import DuckDuckGoSearchPro
 from agent_platform.search.mock_search_provider import MockSearchProvider
 from agent_platform.search.tavily_search_provider import TavilySearchProvider
 from agent_platform.security.credentials import build_azure_credential
+from agent_platform.tools.delegate_tool import DelegateToAgentTool
 from agent_platform.tools.internet_search_tool import InternetSearchTool
 from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform.workflow.direct_engine import DirectWorkflowEngine
@@ -166,6 +169,7 @@ def build_search_provider(settings: PlatformSettings) -> SearchProvider:
 def build_tool_registry(
     settings: PlatformSettings,
     search_provider: SearchProvider,
+    runtime_provider: Callable[[], AgentRuntime],
 ) -> KeyedRegistry[ToolProvider]:
     """Register every tool this deployment offers.
 
@@ -183,6 +187,21 @@ def build_tool_registry(
             max_results=settings.search.max_results,
         )
         registry.register(tool.descriptor.tool_id, tool)
+
+    # Delegation. Registered as a tool because a tool *is* the runtime
+    # mediating: `architecture.md` §31 forbids agents calling each other
+    # directly, and the tool pipeline already applies authorisation, timeouts,
+    # retries, telemetry and budgets to every hop.
+    if settings.research_agent.enabled:
+        delegate = DelegateToAgentTool(
+            runtime_provider=runtime_provider,
+            # Only the agents named here, not everything registered. A
+            # coordinator able to invoke whatever happens to exist is how one
+            # agent's permissions quietly become everyone's.
+            delegatable_agent_ids=(settings.research_agent.agent_id,),
+            max_delegation_depth=settings.research_agent.max_delegation_depth,
+        )
+        registry.register(delegate.descriptor.tool_id, delegate)
 
     return registry
 
@@ -230,6 +249,32 @@ def build_agent_registry(settings: PlatformSettings, gateway: LLMGateway) -> Age
     agent: Agent = ChatAgent(descriptor, gateway)
     registry.register(descriptor.agent_id, agent)
 
+    # The research specialist. No new class: `ChatAgent` is generic because an
+    # agent's behaviour lives in its descriptor and prompt, so a specialist is
+    # configuration plus a prompt asset. That is the property `architecture.md`
+    # §74 asks for, demonstrated rather than asserted.
+    if settings.research_agent.enabled:
+        research = settings.research_agent
+        research_descriptor = AgentDescriptor(
+            agent_id=research.agent_id,
+            name="Research Agent",
+            description=("Searches for current information and answers with cited sources."),
+            # Empty inherits the chat agent's, which is the common case. Setting
+            # them is how one agent uses a cheaper or stronger model.
+            provider_id=research.provider_id or settings.agent.provider_id,
+            model_id=research.model_id or settings.agent.model_id,
+            prompt_id=research.prompt_id,
+            prompt_version=research.prompt_version,
+            temperature=research.temperature,
+            max_output_tokens=research.max_output_tokens,
+            tool_ids=research.tool_ids,
+            budget=BudgetPolicy(
+                max_tool_invocations=research.max_tool_invocations,
+                max_model_calls=research.max_model_calls,
+            ),
+        )
+        registry.register(research_descriptor.agent_id, ChatAgent(research_descriptor, gateway))
+
     return registry
 
 
@@ -262,7 +307,16 @@ class ApplicationContainer(containers.DeclarativeContainer):
         for registries, which are written at startup and read thereafter.
     ``Factory``
         For anything holding per-request state.
+    ``Self``
+        Only for the one genuine cycle: the tool registry is built before the
+        runtime, and the runtime needs the registry. A self-reference defers
+        resolution to first use instead of mutating a constructed object.
     """
+
+    #: The container itself, so a provider declared early can reference one
+    #: declared later. Used once, for delegation; a second use would be a sign
+    #: the graph has an ordering problem rather than a cycle.
+    __self__ = providers.Self()
 
     #: Settings are supplied by the application factory after validation, so a
     #: configuration failure aborts startup before any wiring is attempted.
@@ -311,7 +365,19 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: Executable tools, gated by the search feature flag. With the flag off the
     #: registry is empty, so an agent that declares a tool simply runs without
     #: it — a real off switch rather than a tool that exists and refuses.
-    tool_registry = providers.Singleton(build_tool_registry, settings, search_provider)
+    #: `agent_runtime.provider` rather than `agent_runtime`: the tool registry
+    #: is built before the runtime, and the runtime needs the registry. Passing
+    #: the provider defers resolution to the first delegation, by which time
+    #: everything exists.
+    tool_registry = providers.Singleton(
+        build_tool_registry,
+        settings,
+        search_provider,
+        # Resolves to the `agent_runtime` provider, which is itself callable —
+        # so the tool gets a zero-argument accessor that yields the runtime on
+        # first delegation, by which time the graph is complete.
+        runtime_provider=__self__.provided.agent_runtime,
+    )
 
     #: The one path through which a tool is ever run: resolve, authorise,
     #: validate, time out, retry, record. Never raises.

@@ -80,6 +80,19 @@ class ExecutionContext(BaseModel):
     )
 
     # --- Environment --------------------------------------------------------
+    delegation_depth: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many agents deep this execution is. Zero for a user's request, "
+            "one for an agent the runtime invoked on its behalf, and so on. "
+            "Carried on the context rather than tracked by the runtime because "
+            "it must survive every hop the context takes — through a tool, into "
+            "another agent, and back. A counter held anywhere else is a counter "
+            "that resets at exactly the moment a cycle would be caught."
+        ),
+    )
+
     locale: str = Field(default="en-US", description="BCP 47 locale for responses.")
     feature_flags: dict[str, bool] = Field(
         default_factory=dict,
