@@ -14,7 +14,7 @@ acceptance criterion is verified, not merely implemented.
 | 06 | [Infrastructure as Code](./milestone-06-infrastructure-as-code.md) | ⚠️ **Complete, not provisioned** | 2026-08-08 |
 | 07 | [DevSecOps, CI/CD](./milestone-07-devsecops-cicd-github-actions.md) | ⚠️ **CI green, CD unrun** | 2026-08-08 |
 | 08 | [Production Hardening](./milestone-08-production-hardening-operational-readiness.md) | ⚠️ **Complete, undrilled** | 2026-08-09 |
-| 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⬜ Next | — |
+| 09 | [Enterprise Expansion](./milestone-09-enterprise-expansion.md) | ⚠️ **Partial — scope declared** | 2026-08-09 |
 
 ---
 
@@ -1190,6 +1190,135 @@ nothing is deployed.
 
 ---
 
-## Next: Milestone 09 — Enterprise Expansion
+## Milestone 09 — Enterprise Expansion ⚠️ partial
 
-Not started. Awaiting approval before any work begins.
+**Scope was cut deliberately, and this records exactly what by.**
+
+Milestone 09 as written is nine subsystems: multi-agent orchestration, MCP,
+RAG, embeddings, vector stores, knowledge graphs, long-term memory, model
+routing, governance, approvals, analytics and a marketplace. That is not one
+milestone's work. Nine packages each three-quarters built would satisfy the
+checklist and leave the platform worse than not starting them — every one would
+need revisiting before it could be trusted, and none would be finishable
+without first understanding what the last person left half-done.
+
+**Delivered complete:** multi-agent collaboration.
+
+**Deferred, with reasons:** everything else, below.
+
+### Multi-agent collaboration ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Multiple agents collaborate through the runtime | ✅ | Delegation runs the specialist through `AgentRuntime`; verified end to end |
+| Agents never call each other directly | ✅ | Delegation is a tool, so the runtime mediates — `architecture.md` §31 |
+| A second agent needs no new code | ✅ | The research agent is a settings block and a prompt asset. `ChatAgent` is generic |
+| Cycles are bounded | ✅ | `delegation_depth` on the ExecutionContext; refused at the limit |
+| An agent cannot reach what it was not permitted | ✅ | Refused by name, with the real options listed |
+
+The delegation-as-a-tool decision is the one worth keeping. The tool pipeline
+already resolves through a registry, checks the caller is permitted, validates
+arguments, applies timeout and retry policy, records telemetry and enforces
+budgets. Delegation needs every one of those. A parallel mechanism would have
+meant implementing them again and getting one subtly wrong.
+
+Cycles were the real problem. A delegates to B delegates to A, and each
+individual call looks reasonable. The depth counter rides on the context so it
+survives every hop — including into a delegate's own tools — because a counter
+held anywhere else resets at exactly the moment a cycle would be caught.
+
+One genuine cycle appeared in the object graph too: the tool registry is built
+before the runtime, and the runtime needs the registry. Resolved with a
+container self-reference giving the tool a lazy accessor, rather than mutating
+a constructed object — which would leave a window where the tool exists and
+cannot work.
+
+### Deferred, and why
+
+| Capability | Why not now |
+| --- | --- |
+| RAG, embeddings, vector store | Needs an embedding provider and a vector database, neither provisioned. A RAG pipeline with no corpus is a demo, and retrieval quality cannot be judged without real documents |
+| Knowledge graph | Same, plus no source data exists to build one from |
+| Long-term memory | The right fix for the in-process memory gap, and it needs Redis or Cosmos DB. Doing it properly is a milestone, not an afternoon |
+| MCP tools | Genuinely adapter-shaped and the smallest of these. Deferred only because it is worth doing after there is a second tool worth exposing |
+| Model routing by policy | Small and worthwhile. Deferred for honesty about remaining scope rather than difficulty |
+| RBAC and governance | `CLAUDE.md` says explicitly: "Do not implement authorization now. Ensure architecture supports it." Following that instruction |
+| Marketplace, scheduler, workflow designer, dashboards | Product surfaces, each larger than everything delivered in this milestone |
+
+### Live verification
+
+Against `FW-Kimi-K3` and Tavily, asking a research question with no instruction
+to delegate:
+
+```
+[TOOL] internet-search x4
+11,659 prompt / 2,329 completion tokens
+5,051-character answer, cited, current
+```
+
+**The coordinator chose not to delegate.** It ran four searches itself. That is
+the prompt working as written — "do not delegate what you can answer yourself" —
+and it means **delegation is proven structurally, not live**. The structural
+proof is complete: the tool runs the specialist through the runtime, the depth
+guard refuses at the limit, an unlisted agent is refused, and the specialist
+also runs as a first-class agent.
+
+Whether a model *chooses* to delegate is prompt engineering, and it is the part
+this milestone has least evidence about.
+
+### Verification performed
+
+```
+ruff / black / mypy --strict ... clean (147 files)
+pytest ....................... 666 passed   (649 before)
+                               17 new: delegation, cycle guard, authorisation,
+                               failure handling, health
+Local deployment ............. running; 2 prompt assets, 2 agents, Tavily and
+                               Azure AI Foundry both healthy
+```
+
+### Known limitations
+
+1. **Delegation is unproven with a live model choosing it.** The path works;
+   the judgement to use it is the model's.
+2. **The specialist cannot see the conversation.** Deliberate — it answers one
+   self-contained task — but it means a coordinator must restate context, and a
+   poorly-phrased task produces a poor answer with no way to ask.
+3. **No agent-to-agent streaming.** A delegated turn is non-streaming, so the
+   user waits through it in silence beyond the `tool` event.
+4. **Delegation cost is reported but not aggregated.** The tool returns the
+   specialist's tokens; nothing sums them into a single per-request figure.
+
+---
+
+## Deployment — 2026-08-09
+
+### Local ✅
+
+Running against the real Azure AI Foundry deployment and Tavily.
+
+```
+overall: healthy
+  file-prompts    healthy   2 prompt asset(s) across 2 prompt(s)
+  tavily          healthy   Tavily search API
+  azure-foundry   healthy   Configured for deployment 'FW-Kimi-K3'
+  session-memory  healthy   0/500 conversations
+```
+
+A live research request returned a cited, current answer using four searches.
+
+### Azure ⛔ blocked
+
+`azd` 1.30 was installed and the `dev` environment configured, pointed at the
+**existing** Foundry account rather than provisioning a second one —
+`PROVISION_AI_FOUNDRY=false` — which avoids duplicating a billable model
+deployment and sidesteps the marketplace-agreement risk noted in Milestone 06.
+
+`azd provision` was **not run**: it creates billable resources and requires
+explicit approval, which an automated session cannot give itself.
+
+**One step will be needed after provisioning that the template cannot do.**
+Bicep can only grant roles on resources it creates, and this environment reuses
+a Foundry account it does not own. The managed identity must be granted
+`Cognitive Services User` on it, or every chat request fails with a 401 that
+does not mention roles.
