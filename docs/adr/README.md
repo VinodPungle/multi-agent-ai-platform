@@ -25,6 +25,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0013](./0013-policy-driven-model-routing.md) | Policy-driven model routing | Accepted | 09 |
 | [0014](./0014-mcp-tools-as-an-adapter.md) | MCP tools as a Tool Registry adapter | Accepted | 09 |
 | [0015](./0015-retrieval-augmented-generation.md) | Retrieval-augmented generation, with retrieval as a tool | Accepted | 09 |
+| [0016](./0016-evaluation-records-and-cost-analytics.md) | Evaluation records, and cost analytics as an evaluation sink | Accepted | 09 |
 
 ## Writing one
 

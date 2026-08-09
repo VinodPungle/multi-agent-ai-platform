@@ -21,6 +21,13 @@ from agent_platform.agents.chat_agent import ChatAgent
 from agent_platform.application.chat_service import ChatService
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
+from agent_platform.evaluation.cost_analytics import (
+    CompositeEvaluationProvider,
+    InMemoryCostAnalytics,
+)
+from agent_platform.evaluation.logging_evaluation_provider import (
+    LoggingEvaluationProvider,
+)
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
@@ -587,6 +594,24 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     #: The heart of the platform. Depends on interfaces only, so what it
     #: orchestrates is entirely a matter of what was registered above.
+    # -- Evaluation --------------------------------------------------------
+    # `CLAUDE.md` requires every model invocation to emit evaluation metadata.
+    # The runtime records once, to one port; the fan-out is decided here, so
+    # adding an Application Insights or Cosmos DB sink is a line in this tuple.
+
+    #: In-process running totals, read by the analytics endpoint. Held as its own
+    #: provider as well as inside the composite, because the endpoint needs to
+    #: *query* it and the runtime only needs to write.
+    cost_analytics = providers.Singleton(InMemoryCostAnalytics)
+
+    evaluation_provider = providers.Singleton(
+        CompositeEvaluationProvider,
+        providers=providers.List(
+            providers.Singleton(LoggingEvaluationProvider),
+            cost_analytics,
+        ),
+    )
+
     #: Chooses which model answers a turn. The runtime asks it rather than
     #: reading the agent's descriptor, so changing routing is a configuration
     #: change (``CLAUDE.md``, "Runtime Model Selection").
@@ -601,6 +626,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         events=event_publisher,
         clock=clock,
         model_router=model_router,
+        evaluation=evaluation_provider,
     )
 
     # -- Application -------------------------------------------------------

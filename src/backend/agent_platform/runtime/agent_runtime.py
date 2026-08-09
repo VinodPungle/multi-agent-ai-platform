@@ -26,6 +26,7 @@ entirely a matter of what the composition root registered.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 
 from agent_platform.events.publisher import build_event
 from agent_platform.exceptions.base import (
@@ -38,11 +39,13 @@ from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.agent import AgentDescriptor
 from agent_platform_sdk.dto.completion import CompletionChunk, TokenUsage
+from agent_platform_sdk.dto.evaluation import EvaluationRecord
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.dto.routing import RoutingDecision, RoutingRequest
 from agent_platform_sdk.events.runtime_events import RuntimeEventName
 from agent_platform_sdk.interfaces.agent import Agent
+from agent_platform_sdk.interfaces.evaluation_provider import EvaluationProvider
 from agent_platform_sdk.interfaces.event_publisher import EventPublisher
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_sdk.interfaces.model_router import ModelRouter
@@ -109,6 +112,7 @@ class AgentRuntime:
         events: EventPublisher,
         clock: Clock,
         model_router: ModelRouter,
+        evaluation: EvaluationProvider,
     ) -> None:
         """Create the runtime.
 
@@ -125,6 +129,9 @@ class AgentRuntime:
                 asks rather than reading the descriptor directly, so a routing
                 policy can be changed by configuration without this file
                 knowing that policies exist.
+            evaluation: Where per-turn measurements go. One port, however many
+                sinks the composition root fans it out to — the runtime records
+                once and does not know whether anything is listening.
         """
         self._agents = agents
         self._workflow_engine = workflow_engine
@@ -133,6 +140,7 @@ class AgentRuntime:
         self._events = events
         self._clock = clock
         self._model_router = model_router
+        self._evaluation = evaluation
 
     # -- Lifecycle ---------------------------------------------------------
 
@@ -244,6 +252,17 @@ class AgentRuntime:
                 # The user's message is still recorded, so the conversation
                 # shows what was asked and a retry has the history it needs.
                 await self._record(turn, answer="", context=turn.context)
+                # A failed turn is measured too. Cost and latency data that
+                # counts only successes flatters the platform exactly when it is
+                # misbehaving, and a failure that consumed tokens still cost
+                # money.
+                await self._evaluate(
+                    turn,
+                    usage=TokenUsage(),
+                    latency_ms=(self._clock.monotonic() - started) * 1000,
+                    succeeded=False,
+                    streaming=False,
+                )
                 raise
 
             elapsed_ms = (self._clock.monotonic() - started) * 1000
@@ -253,6 +272,14 @@ class AgentRuntime:
 
             self._enforce_post_execution_budget(turn, result)
             await self._record(turn, answer=result.message.content, context=turn.context)
+            await self._evaluate(
+                turn,
+                usage=result.usage,
+                latency_ms=elapsed_ms,
+                succeeded=True,
+                streaming=False,
+                estimated_cost=result.estimated_cost,
+            )
 
             await self._publish(
                 RuntimeEventName.AGENT_COMPLETED,
@@ -315,6 +342,25 @@ class AgentRuntime:
                 answer = "".join(chunks)
 
                 await self._record(turn, answer=answer, context=turn.context)
+                # In the `finally`, so a turn the consumer abandoned is still
+                # measured — those tokens were generated and billed whether or
+                # not anyone read them.
+                #
+                # Worth being precise about *when*: breaking out of an
+                # `async for` does not run this block. It runs when the
+                # generator is closed, which the SSE layer does when the
+                # response ends and `async with` does at scope exit. Measured:
+                # the count is unchanged immediately after a `break` and
+                # increments on `aclose()`. A caller that abandons a stream and
+                # never closes it leaves the turn uncounted until garbage
+                # collection.
+                await self._evaluate(
+                    turn,
+                    usage=usage,
+                    latency_ms=elapsed_ms,
+                    succeeded=not failed,
+                    streaming=True,
+                )
 
                 if not failed:
                     await self._publish(
@@ -335,6 +381,50 @@ class AgentRuntime:
         return self._agents.keys()
 
     # -- Internals ---------------------------------------------------------
+
+    async def _evaluate(
+        self,
+        turn: RuntimeTurn,
+        usage: TokenUsage,
+        latency_ms: float,
+        succeeded: bool,
+        streaming: bool,
+        estimated_cost: Decimal | None = None,
+    ) -> None:
+        """Record what this turn consumed.
+
+        Every model invocation emits one of these (``CLAUDE.md``), including the
+        ones that failed and the ones a user abandoned — data that counts only
+        successes flatters the platform exactly when it is misbehaving, and
+        tokens spent on a turn nobody read were still spent.
+
+        Deliberately carries no prompt, no completion and no user input. The
+        record is counts, identifiers and money; it is exported to systems with
+        different retention and access rules than the conversation, and the
+        moment it carries content it becomes a second copy of user data that
+        nobody is governing.
+        """
+        await self._evaluation.record(
+            EvaluationRecord(
+                correlation_id=turn.context.correlation_id,
+                request_id=turn.context.request_id,
+                conversation_id=turn.conversation_id,
+                session_id=turn.context.session_id,
+                agent_id=turn.context.agent_id,
+                # From the routing decision, so cost is attributed to the model
+                # that actually answered rather than the one configured.
+                provider_id=turn.routing.provider_id,
+                model_id=turn.routing.model_id,
+                prompt_version=turn.context.prompt_version,
+                occurred_at=self._clock.now(),
+                latency_ms=latency_ms,
+                usage=usage,
+                estimated_cost=estimated_cost,
+                succeeded=succeeded,
+                streaming=streaming,
+            ),
+            turn.context,
+        )
 
     async def _route(
         self,

@@ -294,11 +294,22 @@ class TestHealth:
 
         assert (await provider.health_check()).status is HealthStatus.UNKNOWN
 
-    async def test_the_url_never_appears_in_logs(self, caplog: pytest.LogCaptureFixture) -> None:
-        """It carries the password when a deployment authenticates with a key."""
+    async def test_the_url_never_appears_in_logs(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """It carries the password when a deployment authenticates with a key.
+
+        Read from captured **stdout**, not `caplog`. structlog renders there, so
+        `caplog.text` is empty for this event — and an absence assertion against
+        an empty string passes for the wrong reason. This version proves the
+        initialisation line was captured first, so "the password is not in it"
+        is a claim about real output.
+        """
         provider = build_provider(url="redis://user:hunter2@example.com:6379")
 
-        with caplog.at_level("DEBUG"):
-            await provider.initialize()
+        await provider.initialize()
 
-        assert "hunter2" not in caplog.text
+        written = capsys.readouterr().out
+        assert "memory.initialized" in written
+        assert "hunter2" not in written

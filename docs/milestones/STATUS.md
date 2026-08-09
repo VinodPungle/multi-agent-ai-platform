@@ -1190,9 +1190,20 @@ nothing is deployed.
 
 ---
 
-## Milestone 09 — Enterprise Expansion ⚠️ partial
+## Milestone 09 — Enterprise Expansion ⚠️ substantially complete
 
-**Scope was cut deliberately, and this records exactly what by.**
+**Six of the milestone's capabilities are delivered. What remains is recorded
+below with reasons, not quietly dropped.**
+
+Delivered: multi-agent collaboration, long-term memory, policy-driven model
+routing, MCP tools, RAG with embeddings and a vector store, and evaluation
+metrics with cost analytics.
+
+Deferred: knowledge graph, RBAC and governance (explicitly deferred by
+`CLAUDE.md`), and the product surfaces — marketplace, scheduler, workflow
+designer, dashboards.
+
+**The original scope note, kept because the reasoning still applies.**
 
 Milestone 09 as written is nine subsystems: multi-agent orchestration, MCP,
 RAG, embeddings, vector stores, knowledge graphs, long-term memory, model
@@ -1202,9 +1213,9 @@ checklist and leave the platform worse than not starting them — every one woul
 need revisiting before it could be trusted, and none would be finishable
 without first understanding what the last person left half-done.
 
-**Delivered complete:** multi-agent collaboration.
-
-**Deferred, with reasons:** everything else, below.
+That judgement stood: the milestone was taken one capability at a time, each
+finished and verified before the next was started, rather than nine started
+together. Six are now complete; the rest are below with their reasons.
 
 ### Multi-agent collaboration ✅
 
@@ -1507,6 +1518,74 @@ number that would look authoritative.
    structure invisibly.
 6. **No reranking, hybrid search or query rewriting.** Each is a real
    improvement and a separate decision.
+
+### Evaluation metrics and cost analytics ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Every model invocation emits evaluation metadata | ✅ | Runtime records after every turn — completed, failed and streamed |
+| Metrics are collected | ✅ | Provider, model, agent, tokens, cost, latency, success |
+| Cost is queryable | ✅ | `GET /api/v1/analytics/costs`, grouped by model, provider and agent |
+| Telemetry cannot fail a request | ✅ | Every sink swallows; the composite enforces rather than trusts |
+| Adding a durable sink is additive | ✅ | One line in the composite's tuple |
+| No user content is recorded | ✅ | Counts, identifiers and money only — asserted against captured output |
+
+**Cost analytics is an `EvaluationProvider`, not a special case.** That is what
+lets the runtime record once, to one port, without knowing how many things
+listen. A second sink — Application Insights, Cosmos DB — is a line in a tuple.
+
+**Failed and abandoned turns are recorded**, which is the decision most easily
+got wrong by accident. Counting only successes flatters the platform exactly
+when it is misbehaving: an incident where half of requests fail would show
+unchanged cost and improving latency. A failed turn often consumed tokens, and
+those were billed.
+
+**A live run caught an overclaim in my own comment.** The code said a turn the
+consumer abandoned is "still measured". Measured against the real runtime, the
+count was unchanged after a `break` and incremented only on `aclose()` —
+because breaking out of an `async for` does not run the generator's `finally`.
+The behaviour is correct (the SSE layer closes the generator); the comment was
+imprecise, and both it and a test now say exactly when the record lands.
+
+**Attribution follows the routing decision**, not the agent's configuration.
+With policy routing those differ, and cost attributed to a model that did not
+answer is worse than none — it is wrong in a way that looks right.
+
+### Live verification
+
+Three completed turns plus one abandoned stream, through the real container:
+
+```
+invocations : 3
+failures    : 0
+tokens      : 1983 prompt / 705 completion
+cost        : 0 (Decimal)
+  by model    mock-echo    3 call(s)
+  by provider mock         3 call(s)
+  by agent    chat-agent   3 call(s)
+evaluation health: Recording to: logging-evaluation, cost-analytics
+```
+
+The abandoned stream shows as uncounted here precisely because the script broke
+out without closing the generator — the finding described above, reproduced.
+
+**Known limitations.**
+
+1. **Totals are per-process and reset on restart.** A live gauge, not a ledger.
+   The ledger is the `evaluation.recorded` events in the structured log, which
+   survive restarts and cover every replica. The endpoint says so in a `scope`
+   field rather than in documentation, because a per-replica figure read as
+   platform-wide spend is the easiest way to make a cost dashboard actively
+   misleading.
+2. **The endpoint has no authorisation.** Spend by model and agent is
+   commercially sensitive and this is as open as the rest of the API. It is the
+   first endpoint that should be protected when authorisation arrives.
+3. **`average_latency_ms` is a mean**, so it says nothing about the tail — which
+   is what users notice. Percentiles need the individual records.
+4. **Cost is an estimate** from configured prices, never an invoice. An unpriced
+   model contributes zero, so it silently reads as free.
+5. **No time series.** "Today versus yesterday" needs a durable sink.
+6. **No UI.** The data is behind an API; nothing renders it.
 
 ### Deferred, and why
 

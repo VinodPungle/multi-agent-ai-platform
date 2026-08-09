@@ -221,6 +221,27 @@ a redeployment with the same name fails.
 
 ---
 
+## 8b. Cost visibility
+
+`GET /api/v1/analytics/costs` reports token usage, estimated cost, failure
+counts and mean latency, grouped by model, provider and agent.
+
+Two caveats that matter before anyone builds on it:
+
+- **It counts this process only.** Totals reset on restart and are not
+  aggregated across replicas. The response says so in its `scope` field. For a
+  figure covering the whole platform, query the `evaluation.recorded` events in
+  Log Analytics — those survive restarts and cover every replica.
+- **It has no authorisation.** Spend by model and agent is commercially
+  sensitive and this endpoint is as open as the rest of the API. It is the first
+  endpoint that should be protected when authorisation arrives.
+
+Costs are estimates computed from the prices in configuration, never from an
+invoice. A model with no pricing configured contributes zero, so an unpriced
+deployment reads as free.
+
+---
+
 ## 9. Troubleshooting
 
 **`AuthorizationFailed` on a role assignment**

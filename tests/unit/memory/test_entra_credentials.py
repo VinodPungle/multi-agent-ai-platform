@@ -128,12 +128,16 @@ class TestSynchronousUse:
 class TestDisclosure:
     async def test_the_token_never_appears_in_logs(
         self,
-        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """It is a bearer credential: a log line containing it is a usable credential."""
+        """It is a bearer credential: a log line containing it is a usable credential.
+
+        Read from captured **stdout** rather than `caplog`, because structlog
+        renders there — an absence assertion against an empty `caplog.text`
+        would pass whatever the code did.
+        """
         provider = build_provider(RecordingCredential())
 
-        with caplog.at_level("DEBUG"):
-            await provider.get_credentials_async()
+        await provider.get_credentials_async()
 
-        assert "token-1" not in caplog.text
+        assert "token-1" not in capsys.readouterr().out

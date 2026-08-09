@@ -35,6 +35,13 @@ from agent_platform.configuration.settings import (
     TelemetrySettings,
     get_settings,
 )
+from agent_platform.evaluation.cost_analytics import (
+    CompositeEvaluationProvider,
+    InMemoryCostAnalytics,
+)
+from agent_platform.evaluation.logging_evaluation_provider import (
+    LoggingEvaluationProvider,
+)
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
@@ -408,12 +415,14 @@ class RuntimeStack:
         prompts: StubPromptProvider,
         agents: AgentRegistry,
         clock: ManualClock,
+        analytics: InMemoryCostAnalytics,
     ) -> None:
         self.runtime = runtime
         self.gateway = gateway
         self.memory = memory
         self.prompts = prompts
         self.agents = agents
+        self.analytics = analytics
         self.clock = clock
 
 
@@ -504,6 +513,9 @@ def build_stack() -> Callable[..., RuntimeStack]:
 
         tool_executor = _tool_executor(clock, search_fails=search_fails) if with_tools else None
 
+        analytics = InMemoryCostAnalytics()
+        evaluation = CompositeEvaluationProvider((LoggingEvaluationProvider(), analytics))
+
         agents: AgentRegistry = KeyedRegistry("agent")
         if register_agent:
             agent: Agent = ChatAgent(descriptor, gateway)
@@ -524,9 +536,13 @@ def build_stack() -> Callable[..., RuntimeStack]:
             # asked for and prove nothing about the two working together —
             # which is the failure mode this suite has hit three times.
             model_router=a_model_router(descriptor),
+            # The real composite over the real sinks, so a test exercises
+            # the same fan-out production does — and so `RuntimeStack`
+            # can assert on what a turn actually recorded.
+            evaluation=evaluation,
         )
 
-        return RuntimeStack(runtime, gateway, memory, prompts, agents, clock)
+        return RuntimeStack(runtime, gateway, memory, prompts, agents, clock, analytics)
 
     return _build
 

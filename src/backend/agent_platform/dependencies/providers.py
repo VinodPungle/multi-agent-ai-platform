@@ -19,12 +19,14 @@ from agent_platform.application.chat_service import ChatService
 from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.dependencies.container import ApplicationContainer
+from agent_platform.evaluation.cost_analytics import InMemoryCostAnalytics
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_shared import get_correlation_id, get_request_id
 
 __all__ = [
     "ChatServiceDep",
     "ContainerDep",
+    "CostAnalyticsDep",
     "ExecutionContextDep",
     "HealthServiceDep",
     "SettingsDep",
@@ -85,6 +87,22 @@ def get_chat_service(container: ContainerDep) -> ChatService:
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+
+
+def get_cost_analytics(container: ContainerDep) -> InMemoryCostAnalytics:
+    """Return the running cost totals.
+
+    Typed as the concrete class rather than `EvaluationProvider`, and that is
+    deliberate: the endpoint needs to *query* the totals, and querying is not
+    part of the recording contract. Widening the interface so this could be
+    abstract would force every future sink to implement a report it has no
+    way to produce.
+    """
+    analytics: InMemoryCostAnalytics = container.cost_analytics()
+    return analytics
+
+
+CostAnalyticsDep = Annotated[InMemoryCostAnalytics, Depends(get_cost_analytics)]
 
 
 def get_execution_context(settings: SettingsDep) -> ExecutionContext:
