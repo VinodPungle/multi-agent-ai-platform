@@ -233,6 +233,22 @@ API URL is `http://localhost:8000`.
 `aiFoundryDeploymentCapacity` exceeds the subscription's quota for that SKU and
 region. Lower it, or request a quota increase.
 
+**`az role assignment` fails with `MissingSubscription`**
+A defect in Azure CLI 2.85.0: any `az role assignment` command with `--scope`
+fails this way, including a read-only `list`. `--subscription` does not help.
+Use the ARM API instead — `az rest --method put --headers
+"Content-Type=application/json" --body "@file.json"`. The header is required;
+`az rest` does not set it on a PUT.
+
+**A role was granted but the app still returns 401**
+Restart the revision. A process that started before the role existed has cached
+the failed credential, and the configuration being correct is not the same as
+the process having noticed.
+
+```bash
+az containerapp revision restart -n <app> -g <rg> --revision <revision>
+```
+
 **Key Vault name already exists**
 A previous `azd down` without `--purge` left it soft-deleted:
 `az keyvault purge --name <name>`.

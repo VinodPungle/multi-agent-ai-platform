@@ -1366,7 +1366,36 @@ Three things that had been asserted for milestones and were now actually true:
 Nothing required a change to the templates, which is the first time in this
 project that a first live run of anything has not.
 
-### Outstanding: one role assignment
+### Verified end to end in Azure ✅
+
+After the role assignment below, the deployed platform answers:
+
+```
+POST /api/v1/chat/messages
+  model    fw-kimi-k3 / azure-foundry
+  tokens   833 prompt / 297 completion
+  latency  3,938 ms
+
+POST /api/v1/chat/messages/stream
+  [TOOL] internet-search - "latest stable Python version release date"
+  192 delta chunks, 3,943 / 479 tokens
+  "The latest stable version of Python is 3.14, first released on October 7,
+   2025 (Python Developer's Guide, Liquid Web). The most recent maintenance
+   release is 3.14.7, published on August 5, 2026 (endoflife.date)."
+```
+
+**This closes the claim Milestone 05 has been making since it was written.**
+`DefaultAzureCredential` runs identical code under `az login` locally and
+Managed Identity in Azure — and until this request only the local half had ever
+executed. There is no key in the application, in the image, in the templates or
+in the repository, and the deployed platform authenticated anyway.
+
+Tavily also works from Azure, which exercises the whole secret path: a
+`@secure()` Bicep parameter, into Key Vault, resolved by the managed identity at
+revision start, into a container that never sees the value in its environment
+definition.
+
+### The role assignment, and what it cost to apply
 
 Chat returns:
 
@@ -1392,6 +1421,33 @@ Until it is granted, health is green and chat returns a provider error — which
 the correct behaviour: the health probe reports configuration, and the
 configuration *is* correct. Connectivity is proven by the first request, and
 that is the request proving it.
+
+**Applying it took three attempts, none of them a platform defect.**
+
+`az role assignment` on Azure CLI 2.85.0 fails with `MissingSubscription`
+whenever `--scope` is passed — including a read-only `list`, which is how it was
+identified as a CLI defect rather than a permissions problem. `--subscription`
+does not help; the flag never reaches the client making the call. The working
+form is the ARM API directly:
+
+```bash
+az rest --method put --headers "Content-Type=application/json" \
+  --url "https://management.azure.com<scope>/providers/Microsoft.Authorization/roleAssignments/<new-guid>?api-version=2022-04-01" \
+  --body "@role-assignment.json"
+```
+
+`--headers "Content-Type=application/json"` is required — `az rest` does not set
+it on a PUT and returns `UnsupportedMediaType` without it. The body belongs in a
+file rather than inline, because PowerShell's quoting mangles inline JSON.
+
+**And the assignment alone was not enough.** The backend still returned 401 with
+the role in place and every identifier verified correct. The running process had
+started before the role existed and had cached the failed credential; restarting
+the revision fixed it immediately.
+
+That is worth remembering during an incident: after granting a role to a running
+workload, restart it. The configuration being right is not the same as the
+process having noticed.
 
 ### Cost note
 
