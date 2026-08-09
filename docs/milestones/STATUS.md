@@ -1433,12 +1433,86 @@ tool takes no arguments.
 6. **Not yet used against a third-party server.** Verified against a real MCP
    server over real HTTP, but one the test suite starts itself.
 
+### RAG, embeddings and vector store ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| A RAG pipeline is operational | ✅ | Live: corpus indexed at startup, queried through the tool executor |
+| Documents are chunked on structure | ✅ | Paragraphs, then sentences, then a hard cut; overlapping |
+| Embeddings are provider-agnostic | ✅ | Local hashing and Azure Foundry behind one interface |
+| A vector store is pluggable | ✅ | `VectorStoreProvider`; in-process exact search first |
+| Retrieval is governed by the runtime | ✅ | It is a tool, so authorisation, timeout, retry, telemetry and budget apply |
+| Re-indexing is safe | ✅ | Derived record ids replace; orphaned tails are deleted |
+| It runs with nothing provisioned | ✅ | `docker compose up` and CI need no model and no database |
+
+**Retrieval is a tool, not a prompt preamble.** That is the decision the whole
+slice turns on. The usual pattern — retrieve on every turn and prepend the
+passages — spends context on turns that need none, sits outside every runtime
+policy, and gives the model no way to say what it searched for. As a tool, the
+model decides when documents are needed, an agent that must not see internal
+documents simply does not list it, and the query is visible because the model
+formulated it.
+
+### Live verification
+
+The repository's own corpus, indexed at startup and queried through the tool
+executor:
+
+```
+tools: ('internet-search', 'knowledge-search', 'delegate-to-agent')
+vectors indexed: 6
+
+query: 'how does agent delegation avoid cycles'
+    [0.482] platform-overview.md   # Multi-Agent AI Platform Overview...
+query: 'trace sampling telemetry cost'
+    [0.515] cost-controls.md       # Cost Controls...
+query: 'what is the aubergine harvest forecast'
+    [0.463] platform-overview.md   is carried on the execution context...
+```
+
+**The third line is the most useful result here, and it is a negative one.** A
+question the corpus cannot answer still scored **0.463** — barely below the
+genuine matches. That is the "nearest neighbours are always returned" problem in
+one line: a vector search has no concept of *irrelevant*, and without a score
+threshold those passages reach the model looking exactly like an answer.
+
+It is also a fair measure of the development embedder. Lexical matching gives
+any two pieces of English a moderate baseline similarity from shared character
+trigrams, which compresses the range between a real match and a bad one. A real
+embedding model separates them much more sharply — and `minimum_score` exists to
+be tuned once one is in use, which is why its default is `0` rather than a
+number that would look authoritative.
+
+**Known limitations.**
+
+1. **The development embedder is lexical, not semantic.** It matches shared
+   character sequences, so "car" and "automobile" are unrelated to it. Stated in
+   the class, its health output, the settings and ADR-0015, and refused in
+   production-like environments — the failure mode of a plausible fake is that
+   somebody eventually believes it. The tests deliberately assert only what it
+   genuinely does; there is no test claiming a paraphrased question finds the
+   right passage.
+2. **Retrieval quality is unmeasured.** No evaluation set, no recall or
+   precision figures. Judging it needs a real embedding model and a corpus with
+   known answers, and neither exists yet.
+3. **The vector store is neither durable nor shared.** Rebuilt on every start,
+   one copy per replica. The same trajectory memory took, and the same kind of
+   change to fix.
+4. **No Azure AI Search implementation.** The Foundry embedding provider is
+   written but has not been run against a live deployment — there is no
+   embedding deployment provisioned. Written by introspecting the installed
+   SDK, not from memory, but *unverified against a real endpoint* and recorded
+   as such.
+5. **Text formats only.** PDF and DOCX need a parser, and a bad parser loses
+   structure invisibly.
+6. **No reranking, hybrid search or query rewriting.** Each is a real
+   improvement and a separate decision.
+
 ### Deferred, and why
 
 | Capability | Why not now |
 | --- | --- |
-| RAG, embeddings, vector store | Needs an embedding provider and a vector database, neither provisioned. A RAG pipeline with no corpus is a demo, and retrieval quality cannot be judged without real documents |
-| Knowledge graph | Same, plus no source data exists to build one from |
+| Knowledge graph | No source data exists to build one from, and entity extraction is a modelling problem rather than a plumbing one |
 | RBAC and governance | `CLAUDE.md` says explicitly: "Do not implement authorization now. Ensure architecture supports it." Following that instruction |
 | Marketplace, scheduler, workflow designer, dashboards | Product surfaces, each larger than everything delivered in this milestone |
 

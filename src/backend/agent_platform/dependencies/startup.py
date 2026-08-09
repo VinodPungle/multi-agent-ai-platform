@@ -14,9 +14,14 @@ on a user's first request as an error nobody can attribute.
 from __future__ import annotations
 
 from agent_platform.dependencies.container import ApplicationContainer
-from agent_platform.exceptions.base import ConfigurationError
+from agent_platform.exceptions.base import ConfigurationError, PlatformError
+from agent_platform.knowledge.document_loader import (
+    load_documents,
+    resolve_documents_directory,
+)
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.tools.mcp.discovery import discover_mcp_tools
+from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.interfaces.provider import Provider
 
 __all__ = ["shutdown_platform", "start_platform"]
@@ -37,6 +42,7 @@ async def start_platform(container: ApplicationContainer) -> None:
 
     await _populate_model_registry(container)
     await _register_mcp_tools(container)
+    await _index_knowledge(container)
     _validate_agents(container)
 
     _logger.info(
@@ -78,6 +84,8 @@ def _initialisable(container: ApplicationContainer) -> tuple[Provider, ...]:
         container.prompt_provider(),
         container.memory_provider(),
         container.search_provider(),
+        container.vector_store(),
+        container.embedding_provider(),
         *container.llm_providers(),
     )
 
@@ -141,6 +149,61 @@ async def _register_mcp_tools(container: ApplicationContainer) -> None:
             )
             continue
         registry.register(tool.descriptor.tool_id, tool)
+
+
+async def _index_knowledge(container: ApplicationContainer) -> None:
+    """Read the corpus and build the index.
+
+    At startup, and synchronously with it, so that the platform is either ready
+    to answer from its documents or has said clearly why not. Indexing in the
+    background would make the first requests after a deployment silently
+    unanswerable — retrieval returning nothing looks identical to a corpus that
+    has nothing to say.
+
+    Embedding a large corpus costs real money and real time. That is why this is
+    off by default and why the document count and passage count are logged: an
+    unexpected number here is the first sign that something is being embedded
+    that should not be.
+
+    A failure does **not** stop the platform. Knowledge search is one capability
+    among several, and a chat platform that refuses to start because an
+    embedding deployment is throttled is worse than one that starts and says
+    that tool is unavailable.
+    """
+    settings = container.settings()
+    if not settings.knowledge.enabled:
+        return
+
+    directory = resolve_documents_directory(settings.knowledge.documents_directory)
+    documents = load_documents(directory)
+    if not documents:
+        return
+
+    indexer = container.knowledge_indexer()
+
+    try:
+        passages = await indexer.index(documents, ExecutionContext())
+    except PlatformError:
+        _logger.warning(
+            "knowledge.indexing_failed",
+            directory=str(directory),
+            documents=len(documents),
+            detail=(
+                "The platform started without a knowledge index. Knowledge "
+                "search will return nothing until this is fixed and the "
+                "platform restarted."
+            ),
+            exc_info=True,
+        )
+        return
+
+    _logger.info(
+        "knowledge.ready",
+        directory=str(directory),
+        collection=indexer.collection,
+        documents=len(documents),
+        passages=passages,
+    )
 
 
 def _validate_agents(container: ApplicationContainer) -> None:

@@ -24,6 +24,9 @@ from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
+from agent_platform.knowledge.in_memory_vector_store import InMemoryVectorStore
+from agent_platform.knowledge.indexer import KnowledgeIndexer
+from agent_platform.knowledge.retriever import KnowledgeRetriever
 from agent_platform.memory.entra_credentials import EntraIdRedisCredentialProvider
 from agent_platform.memory.redis_memory import RedisConversationMemoryProvider
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
@@ -31,9 +34,13 @@ from agent_platform.prompts.file_prompt_provider import (
     FilePromptProvider,
     resolve_prompts_directory,
 )
+from agent_platform.providers.azure_foundry.azure_foundry_embeddings import (
+    AzureFoundryEmbeddingProvider,
+)
 from agent_platform.providers.azure_foundry.azure_foundry_provider import (
     AzureFoundryProvider,
 )
+from agent_platform.providers.mock.hashing_embedding_provider import HashingEmbeddingProvider
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform.registries import (
     AgentRegistry,
@@ -56,6 +63,7 @@ from agent_platform.search.tavily_search_provider import TavilySearchProvider
 from agent_platform.security.credentials import build_azure_credential
 from agent_platform.tools.delegate_tool import DelegateToAgentTool
 from agent_platform.tools.internet_search_tool import InternetSearchTool
+from agent_platform.tools.knowledge_search_tool import KnowledgeSearchTool
 from agent_platform.tools.mcp.discovery import build_mcp_session
 from agent_platform.tools.mcp.session import MCPSession
 from agent_platform.tools.tool_executor import ToolExecutor
@@ -63,6 +71,7 @@ from agent_platform.workflow.direct_engine import DirectWorkflowEngine
 from agent_platform.workflow.langgraph_engine import LangGraphWorkflowEngine
 from agent_platform_sdk.dto.agent import AgentDescriptor
 from agent_platform_sdk.interfaces.agent import Agent
+from agent_platform_sdk.interfaces.embedding_provider import EmbeddingProvider
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
@@ -77,6 +86,7 @@ from agent_platform_shared.clock import SystemClock
 __all__ = [
     "ApplicationContainer",
     "build_agent_registry",
+    "build_embedding_provider",
     "build_health_probes",
     "build_llm_providers",
     "build_mcp_sessions",
@@ -248,6 +258,7 @@ def build_tool_registry(
     settings: PlatformSettings,
     search_provider: SearchProvider,
     runtime_provider: Callable[[], AgentRuntime],
+    retriever: KnowledgeRetriever | None = None,
 ) -> KeyedRegistry[ToolProvider]:
     """Register every tool this deployment offers.
 
@@ -266,6 +277,17 @@ def build_tool_registry(
         )
         registry.register(tool.descriptor.tool_id, tool)
 
+    # Retrieval is a tool, not a prompt preamble: the model decides when
+    # documents are needed, so a turn that needs none spends no context on them
+    # — and the runtime applies the same authorisation, timeout, retry,
+    # telemetry and budget it applies to every other tool. See ADR-0015.
+    if settings.knowledge.enabled and retriever is not None:
+        knowledge_tool = KnowledgeSearchTool(
+            retriever=retriever,
+            max_passages=settings.knowledge.max_passages,
+        )
+        registry.register(knowledge_tool.descriptor.tool_id, knowledge_tool)
+
     # Delegation. Registered as a tool because a tool *is* the runtime
     # mediating: `architecture.md` §31 forbids agents calling each other
     # directly, and the tool pipeline already applies authorisation, timeouts,
@@ -282,6 +304,30 @@ def build_tool_registry(
         registry.register(delegate.descriptor.tool_id, delegate)
 
     return registry
+
+
+def build_embedding_provider(settings: PlatformSettings) -> EmbeddingProvider:
+    """Return the configured embedding provider.
+
+    The hashing provider is refused in production-like environments. It computes
+    *lexical* embeddings — shared character sequences, not meaning — and a
+    knowledge base built on it would answer confidently from documents that
+    merely look like the question. The check here mirrors the mock LLM
+    provider's, and for the same reason: something convincing enough to be
+    useful in development is exactly what gets left switched on by accident.
+    """
+    if (
+        settings.knowledge.embedding_provider == "azure-foundry"
+        or settings.app.environment.is_production_like
+    ):
+        return AzureFoundryEmbeddingProvider(
+            endpoint=settings.azure_foundry.endpoint,
+            deployment=settings.knowledge.embedding_deployment,
+            credential=build_azure_credential(),
+            dimensions=settings.knowledge.embedding_dimensions,
+        )
+
+    return HashingEmbeddingProvider(dimensions=settings.knowledge.embedding_dimensions)
 
 
 def build_mcp_sessions(settings: PlatformSettings) -> tuple[MCPSession, ...]:
@@ -460,6 +506,34 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: Nothing connects here: discovery runs during startup.
     mcp_sessions = providers.Singleton(build_mcp_sessions, settings)
 
+    # -- Knowledge ---------------------------------------------------------
+    # Indexer and retriever share one embedding provider, and that is not
+    # incidental: two different models produce vectors in unrelated spaces, so
+    # embedding a corpus with one and searching it with the other returns
+    # confident nonsense rather than an error.
+
+    embedding_provider = providers.Singleton(build_embedding_provider, settings)
+
+    vector_store = providers.Singleton(InMemoryVectorStore)
+
+    knowledge_indexer = providers.Singleton(
+        KnowledgeIndexer,
+        embeddings=embedding_provider,
+        vectors=vector_store,
+        collection=settings.provided.knowledge.collection,
+        max_chunk_characters=settings.provided.knowledge.max_chunk_characters,
+        chunk_overlap_characters=settings.provided.knowledge.chunk_overlap_characters,
+    )
+
+    knowledge_retriever = providers.Singleton(
+        KnowledgeRetriever,
+        embeddings=embedding_provider,
+        vectors=vector_store,
+        collection=settings.provided.knowledge.collection,
+        default_limit=settings.provided.knowledge.max_passages,
+        minimum_score=settings.provided.knowledge.minimum_score,
+    )
+
     tool_registry = providers.Singleton(
         build_tool_registry,
         settings,
@@ -468,6 +542,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         # so the tool gets a zero-argument accessor that yields the runtime on
         # first delegation, by which time the graph is complete.
         runtime_provider=__self__.provided.agent_runtime,
+        retriever=knowledge_retriever,
     )
 
     #: The one path through which a tool is ever run: resolve, authorise,

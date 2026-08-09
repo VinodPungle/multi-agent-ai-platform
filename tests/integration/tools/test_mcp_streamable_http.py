@@ -41,12 +41,11 @@ pytestmark = pytest.mark.integration
 CONTEXT = ExecutionContext()
 
 
-def _free_port() -> int:
-    """Bind port 0 and report what the OS chose.
+def _closed_port() -> int:
+    """Return a loopback port with nothing listening on it.
 
-    A fixed port would make the suite fail when anything else on the machine
-    happens to hold it, which is the kind of failure that gets blamed on the
-    change under test.
+    Only for the unreachable-server tests, which need a connection to be
+    refused. Not used to place the server: see :func:`mcp_server_url`.
     """
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -73,12 +72,20 @@ def _build_server() -> MCPServer:
 
 @pytest.fixture
 async def mcp_server_url() -> AsyncIterator[str]:
-    """Serve a real MCP server on a loopback port for the duration of a test."""
-    port = _free_port()
+    """Serve a real MCP server on a loopback port for the duration of a test.
+
+    **uvicorn binds port 0 and the port is read back afterwards**, rather than
+    the test choosing a free port and handing it over. Choosing first leaves a
+    window between "this port was free" and "uvicorn bound it", and anything
+    else on the machine can take it in between. That window is invisible when
+    this file runs alone and opens up under the full suite, where many other
+    sockets are in play — which is exactly how it was found: these tests passed
+    in isolation and failed intermittently in a complete run.
+    """
     config = uvicorn.Config(
         _build_server().streamable_http_app(),
         host="127.0.0.1",
-        port=port,
+        port=0,
         log_level="error",
     )
     server = uvicorn.Server(config)
@@ -90,6 +97,8 @@ async def mcp_server_url() -> AsyncIterator[str]:
     # is a plain flag, so there is nothing to await.
     while not server.started:  # noqa: ASYNC110 - uvicorn exposes a flag, not an event
         await asyncio.sleep(0.02)
+
+    port: int = server.servers[0].sockets[0].getsockname()[1]
 
     try:
         yield f"http://127.0.0.1:{port}/mcp"
@@ -187,7 +196,7 @@ class TestUnreachableServer:
         """Transport failure is an outage, not an answer — unlike a tool-level error."""
         session = StreamableHTTPMCPSession(
             server_id="nowhere",
-            url=f"http://127.0.0.1:{_free_port()}/mcp",
+            url=f"http://127.0.0.1:{_closed_port()}/mcp",
             timeout_seconds=2.0,
         )
 
@@ -198,7 +207,7 @@ class TestUnreachableServer:
         """It can carry a token in a query string, and errors reach logs and models."""
         session = StreamableHTTPMCPSession(
             server_id="nowhere",
-            url=f"http://127.0.0.1:{_free_port()}/mcp?token=hunter2",
+            url=f"http://127.0.0.1:{_closed_port()}/mcp?token=hunter2",
             timeout_seconds=2.0,
         )
 

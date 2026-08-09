@@ -353,6 +353,108 @@ class MemorySettings(BaseModel):
         return self
 
 
+class KnowledgeSettings(BaseModel):
+    """Retrieval-augmented generation configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Register the knowledge-search tool and index documents at startup. "
+            "Off by default: with no corpus the tool would exist and always "
+            "return nothing, which teaches a model to stop calling it."
+        ),
+    )
+    embedding_provider: Literal["hashing", "azure-foundry"] = Field(
+        default="hashing",
+        description=(
+            "`hashing` computes lexical embeddings locally — no model, no cost, "
+            "no network — so the pipeline runs on a laptop and in CI. It matches "
+            "shared character sequences, **not meaning**, so retrieval quality "
+            "measured against it says nothing about a real model. "
+            "`azure-foundry` is the real one, and is required outside "
+            "development and testing."
+        ),
+    )
+    documents_directory: str = Field(
+        default="knowledge",
+        description=(
+            "Directory of documents indexed at startup. Resolved like the "
+            "prompts directory: absolute, then relative to the working "
+            "directory, then searched for among this file's ancestors."
+        ),
+    )
+    collection: str = Field(
+        default="knowledge",
+        min_length=1,
+        description="Index name. One per corpus, so a corpus can be dropped alone.",
+    )
+    max_chunk_characters: int = Field(
+        default=1_200,
+        gt=0,
+        description=(
+            "Largest passage produced. Roughly 300 tokens — enough to hold an "
+            "argument, small enough that several fit alongside the conversation."
+        ),
+    )
+    chunk_overlap_characters: int = Field(
+        default=150,
+        ge=0,
+        description=(
+            "Repeated between adjacent passages, so a sentence that answers the "
+            "question does not get split across a boundary and match neither "
+            "half. Capped internally at a third of the chunk size."
+        ),
+    )
+    max_passages: int = Field(
+        default=5,
+        gt=0,
+        le=10,
+        description="Passages returned per search. Every one is prompt context spent.",
+    )
+    minimum_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Below this, a match counts as no match. The setting that separates "
+            "'the corpus has nothing on this' from a confident answer grounded "
+            "in the least-unlike text available. Score semantics differ between "
+            "vector stores, so a value tuned for one means nothing for another — "
+            "which is why the default is 0 rather than a number that looks "
+            "authoritative."
+        ),
+    )
+    embedding_dimensions: int = Field(
+        default=256,
+        gt=0,
+        description=(
+            "Vector length. Must match what the embedding deployment emits: an "
+            "index is built at one dimensionality and cannot accept another."
+        ),
+    )
+    embedding_deployment: str = Field(
+        default="",
+        description="Foundry embedding deployment name. Required for `azure-foundry`.",
+    )
+
+    @model_validator(mode="after")
+    def _require_a_deployment_for_foundry(self) -> Self:
+        """Fail at startup rather than on the first document."""
+        if (
+            self.enabled
+            and self.embedding_provider == "azure-foundry"
+            and not self.embedding_deployment.strip()
+        ):
+            message = (
+                "knowledge.embedding_provider is 'azure-foundry' but "
+                "knowledge.embedding_deployment is not set."
+            )
+            raise ValueError(message)
+        return self
+
+
 class MCPServerSettings(BaseModel):
     """One Model Context Protocol server the platform draws tools from.
 
@@ -1025,6 +1127,7 @@ class PlatformSettings(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
