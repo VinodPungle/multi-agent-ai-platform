@@ -5,15 +5,23 @@ routing to become policy-driven later without touching the gateway. The gateway
 asks this port for a provider; how the answer is produced is entirely the
 resolver's business.
 
-Implementations planned:
+Implementations:
 
-============================  ======================================  ==========
-Implementation                Resolution strategy                     Milestone
-============================  ======================================  ==========
-``ConfiguredProviderResolver``  The single configured provider        current
-Registry-backed resolver        Model registry -> provider registry   03
-Policy-driven resolver          Cost, latency, capability, region     future
-============================  ======================================  ==========
+===============================  ====================================  ==========
+Implementation                   Resolution strategy                   Milestone
+===============================  ====================================  ==========
+``RegistryBackedProviderResolver``  Model catalogue -> provider        09
+===============================  ====================================  ==========
+
+The earlier ``ConfiguredProviderResolver`` returned the single configured
+provider and ignored ``model_id`` entirely — correct while one provider was
+registered, and false the moment routing could choose a model on another. It was
+removed rather than kept alongside: two implementations where only one is wired
+is how a stale one drifts out of agreement with reality unnoticed.
+
+*Choosing* a model is a separate concern and lives behind
+:mod:`agent_platform_sdk.interfaces.model_router`. This port only answers where
+the chosen model is served from.
 
 No implementation may fail over to a second provider unless a policy explicitly
 says so. Silent failover changes which model answered a user without anything in

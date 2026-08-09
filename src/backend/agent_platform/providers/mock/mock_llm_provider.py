@@ -42,6 +42,17 @@ __all__ = ["MockLLMProvider"]
 
 _logger = get_logger(__name__)
 
+#: What this provider actually does. One definition, read by both `supports()`
+#: and `list_models()` — they were maintained separately and disagreed, which is
+#: the only way that mistake happens.
+_MOCK_CAPABILITIES = frozenset(
+    {
+        Capability.STREAMING,
+        Capability.COST_REPORTING,
+        Capability.TOOL_CALLING,
+    }
+)
+
 #: Characters per token. The real figure depends on the tokeniser, which a mock
 #: has no business pretending to have; 4 is the widely used approximation for
 #: English text and is documented as an estimate everywhere it surfaces.
@@ -114,11 +125,17 @@ class MockLLMProvider:
     def supports(self, capability: Capability) -> bool:
         """Declare only what is genuinely implemented.
 
-        Claiming tool calling or structured output would make the runtime route
-        work here that this provider cannot actually do, and the failure would
-        surface far from its cause.
+        Claiming structured output would make the runtime route work here that
+        this provider cannot actually do, and the failure would surface far from
+        its cause.
+
+        Tool calling *is* implemented — see :meth:`_maybe_tool_call`, which both
+        ``generate`` and ``stream`` go through. This method denied it until model
+        routing started reading capability declarations and caught the
+        disagreement: the claim had simply gone stale when tool calling was
+        added, and nothing consumed it in the meantime.
         """
-        return capability in {Capability.STREAMING, Capability.COST_REPORTING}
+        return capability in _MOCK_CAPABILITIES
 
     async def close(self) -> None:
         """Nothing to release."""
@@ -262,7 +279,9 @@ class MockLLMProvider:
                 provider_id=self._provider_id,
                 display_name="Mock Echo",
                 version="1",
-                capabilities=frozenset({Capability.STREAMING}),
+                # The same set `supports()` answers from. Two hand-maintained
+                # lists is how they drifted apart in the first place.
+                capabilities=frozenset(_MOCK_CAPABILITIES),
                 max_context_tokens=8192,
                 max_output_tokens=2048,
                 default_temperature=0.0,

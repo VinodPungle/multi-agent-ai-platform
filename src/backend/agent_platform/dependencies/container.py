@@ -23,7 +23,7 @@ from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
-from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
 from agent_platform.memory.entra_credentials import EntraIdRedisCredentialProvider
 from agent_platform.memory.redis_memory import RedisConversationMemoryProvider
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
@@ -41,6 +41,14 @@ from agent_platform.registries import (
     ModelRegistry,
     ProviderRegistry,
 )
+from agent_platform.routing.policies import (
+    AvailabilityPolicy,
+    CapabilityPolicy,
+    ContextWindowPolicy,
+    ObjectivePolicy,
+    PinnedModelPolicy,
+)
+from agent_platform.routing.policy_router import PolicyModelRouter
 from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform.search.duckduckgo_search_provider import DuckDuckGoSearchProvider
 from agent_platform.search.mock_search_provider import MockSearchProvider
@@ -56,6 +64,7 @@ from agent_platform_sdk.interfaces.agent import Agent
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
 from agent_platform_sdk.interfaces.llm_provider import LLMProvider
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
+from agent_platform_sdk.interfaces.model_router import ModelRouter
 from agent_platform_sdk.interfaces.provider import Provider
 from agent_platform_sdk.interfaces.search_provider import SearchProvider
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
@@ -70,6 +79,7 @@ __all__ = [
     "build_llm_providers",
     "build_memory_provider",
     "build_model_registry",
+    "build_model_router",
     "build_provider_registry",
     "build_search_provider",
     "build_tool_registry",
@@ -142,6 +152,34 @@ def build_model_registry() -> ModelRegistry:
     surface as a provider error on a user's first request.
     """
     return KeyedRegistry("model")
+
+
+def build_model_router(
+    settings: PlatformSettings,
+    models: ModelRegistry,
+) -> ModelRouter:
+    """Return the routing chain this deployment should use.
+
+    The order is the design: constraints first so that rankings only ever sort
+    models which could actually serve the turn, and so a failure names the real
+    reason rather than the last policy to touch an already-empty list.
+
+    Pinning runs before the constraints deliberately. A pinned model that cannot
+    do what the turn requires fails with the capability named — quietly routing
+    elsewhere would answer with a model the caller did not ask for and would
+    never hear about.
+    """
+    return PolicyModelRouter(
+        models=models,
+        policies=(
+            PinnedModelPolicy(),
+            AvailabilityPolicy(),
+            CapabilityPolicy(),
+            ContextWindowPolicy(),
+            ObjectivePolicy(),
+        ),
+        default_objective=settings.routing.objective,
+    )
 
 
 def build_memory_provider(settings: PlatformSettings) -> MemoryProvider:
@@ -423,9 +461,14 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     # -- Inference ---------------------------------------------------------
 
+    #: Resolves a model to the provider that registered it. Registry-backed
+    #: rather than configured, because routing can now choose a model on a
+    #: provider other than the default — and resolving to the default anyway
+    #: would ask it for a model it has never heard of.
     llm_provider_resolver = providers.Singleton(
-        ConfiguredProviderResolver,
+        RegistryBackedProviderResolver,
         providers=llm_providers,
+        models=model_registry,
         default_provider_id=settings.provided.llm_gateway.default_provider_id,
     )
 
@@ -449,6 +492,11 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     #: The heart of the platform. Depends on interfaces only, so what it
     #: orchestrates is entirely a matter of what was registered above.
+    #: Chooses which model answers a turn. The runtime asks it rather than
+    #: reading the agent's descriptor, so changing routing is a configuration
+    #: change (``CLAUDE.md``, "Runtime Model Selection").
+    model_router = providers.Singleton(build_model_router, settings, model_registry)
+
     agent_runtime = providers.Singleton(
         AgentRuntime,
         agents=agent_registry,
@@ -457,6 +505,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         prompts=prompt_provider,
         events=event_publisher,
         clock=clock,
+        model_router=model_router,
     )
 
     # -- Application -------------------------------------------------------

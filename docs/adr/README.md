@@ -22,6 +22,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0010](./0010-tool-framework-and-internet-search.md) | A tool framework, with the loop in the workflow layer | Accepted | 04 |
 | [0011](./0011-azure-ai-foundry-provider.md) | The Azure AI Foundry provider, and keyless authentication | Accepted | 05 |
 | [0012](./0012-durable-conversation-memory.md) | Durable conversation memory on Redis, authenticated by Entra ID | Accepted | 09 |
+| [0013](./0013-policy-driven-model-routing.md) | Policy-driven model routing | Accepted | 09 |
 
 ## Writing one
 

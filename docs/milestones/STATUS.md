@@ -1291,6 +1291,81 @@ after delete: ()
 5. **Not yet exercised in Azure.** The module compiles and the parameters
    validate; no environment has been provisioned with `provisionRedis = true`.
 
+### Policy-driven model routing ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Models are selectable by policy | ✅ | Chain of policies over the catalogue; objective is one setting |
+| Selection works per agent and per request | ✅ | Agent's model is the preference; `pinned_model_id` and `objective` override per turn |
+| Routing crosses providers | ✅ | Live: `lowest_cost` moved a turn from `azure-foundry` to `mock`, and execution followed |
+| A capability mismatch is refused, not ignored | ✅ | A tool-using agent cannot be routed to a model that cannot call tools |
+| Every decision is explicable | ✅ | Policy id, reason and ranked runners-up on the decision and the context |
+| Nothing silently fails over | ✅ | No fallback model, no failover; withdrawal is `is_available`, which is visible |
+
+**A chain, not a score.** A weighted score is easy to write and hard to operate:
+when it picks something unexpected, the answer to "why?" is a number, and the
+only remedy is guessing at weights. A chain answers with the *name of the step*
+that removed the alternative — `capability`, `context-window`, `availability` —
+which is something a person can act on at three in the morning.
+
+**Constraints and rankings are deliberately different.** Constraints remove
+models that cannot serve the turn and may refuse. Rankings reorder viable models
+and can never refuse. Without that split, asking for the cheapest model could
+produce "no model available" — an objective quietly behaving as a second
+constraint, which is how operators learn to distrust a router and pin
+everything.
+
+**Routing found a real defect on its first run.** `MockLLMProvider` emits tool
+calls in both `generate` and `stream`, while `supports()` and `list_models()`
+both declared it could not — a claim that went stale when tool calling was added
+in Milestone 04 and stayed wrong because *nothing read it*. The moment routing
+began filtering on capabilities, every tool-using turn became unroutable. Both
+providers now compute their capability set once, and a test asserts the two
+answers agree for every member of the enum.
+
+That is the argument for capability-based routing in one incident: a declaration
+nobody consumes is a declaration nobody maintains.
+
+**`ConfiguredProviderResolver` was deleted, not deprecated.** It ignored
+`model_id` entirely — correct with one provider, false the moment routing could
+choose another. Keeping it alongside `RegistryBackedProviderResolver` would have
+been a second implementation nothing wired, which is exactly how the mock's
+capability claim drifted.
+
+### Live verification
+
+Two providers registered, Foundry priced from configuration and the mock free:
+
+```
+balanced    -> fw-kimi-k3 on azure-foundry
+               The agent's configured model (fw-kimi-k3) is viable.
+lowest_cost -> mock-echo on mock          <-- crossed providers
+               Cheapest model able to serve the turn (mock-echo).
+               considered: ('mock-echo', 'fw-kimi-k3')
+               context stamped: model=mock-echo provider=mock
+executed    -> 204 chars, served by mock/mock-echo, 710 tokens, cost 0
+bad pin     -> refused by policy 'pinned-model'
+```
+
+The `served by mock/mock-echo` line is the one that matters: the decision did
+not merely get recorded, it changed which provider answered.
+
+**Known limitations.**
+
+1. **The context estimate is a rule of thumb.** Four characters per token, no
+   tokenizer. It errs towards under-estimating, which keeps a marginal model
+   rather than excluding a workable one — the first failure is reported by the
+   provider, the second would be invisible.
+2. **`highest_capability` is an approximation.** Breadth of declared
+   capabilities. The platform has no quality score, and deriving one from price
+   would encode "expensive means good".
+3. **No latency-aware routing.** The platform records latency but does not feed
+   it back into selection.
+4. **Pinning is not on the public API.** Choosing a model is choosing a bill,
+   and there is no authorisation layer yet to decide who may.
+5. **The chain itself is not configurable**, only the objective. Deliberate: a
+   deployment must not be able to remove a constraint by accident.
+
 ### Deferred, and why
 
 | Capability | Why not now |
@@ -1298,7 +1373,6 @@ after delete: ()
 | RAG, embeddings, vector store | Needs an embedding provider and a vector database, neither provisioned. A RAG pipeline with no corpus is a demo, and retrieval quality cannot be judged without real documents |
 | Knowledge graph | Same, plus no source data exists to build one from |
 | MCP tools | Genuinely adapter-shaped and the smallest of these. Deferred only because it is worth doing after there is a second tool worth exposing |
-| Model routing by policy | Small and worthwhile. Deferred for honesty about remaining scope rather than difficulty |
 | RBAC and governance | `CLAUDE.md` says explicitly: "Do not implement authorization now. Ensure architecture supports it." Following that instruction |
 | Marketplace, scheduler, workflow designer, dashboards | Product surfaces, each larger than everything delivered in this milestone |
 

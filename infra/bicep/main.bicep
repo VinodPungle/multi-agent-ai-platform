@@ -125,6 +125,10 @@ param redisSkuCapacity int = 0
 @minValue(300)
 param redisTtlSeconds int = 86400
 
+@description('What model routing optimises for among models that can serve a turn. Capability and context limits are constraints, not preferences, so this never causes a refusal. See ADR-0013.')
+@allowed(['balanced', 'lowest_cost', 'largest_context', 'highest_capability'])
+param routingObjective string = 'balanced'
+
 @description('Create alert rules. Off where nobody is on call - a channel that pages during development gets muted, and it is the same channel production uses.')
 param enableAlerts bool = false
 
@@ -416,6 +420,7 @@ module backendApp 'modules/container-app.bicep' = {
       { name: 'PLATFORM_AZURE_FOUNDRY__ENDPOINT', value: resolvedFoundryEndpoint }
       { name: 'PLATFORM_AZURE_FOUNDRY__DEPLOYMENT', value: aiFoundryDeploymentName }
       { name: 'PLATFORM_AZURE_FOUNDRY__MODEL_ID', value: platformModelId }
+      { name: 'PLATFORM_ROUTING__OBJECTIVE', value: routingObjective }
       { name: 'PLATFORM_AGENT__PROVIDER_ID', value: effectiveProviderId }
       { name: 'PLATFORM_AGENT__MODEL_ID', value: effectiveModelId }
       // The mock answers with templated text. Configuration validation rejects

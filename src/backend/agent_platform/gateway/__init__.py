@@ -20,6 +20,6 @@ Consumers depend on
 """
 
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
-from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
 
-__all__ = ["ConfiguredProviderResolver", "DefaultLLMGateway"]
+__all__ = ["DefaultLLMGateway", "RegistryBackedProviderResolver"]

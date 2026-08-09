@@ -16,6 +16,7 @@ __all__ = [
     "HealthStatus",
     "MessageRole",
     "ResponseFormat",
+    "RoutingObjective",
 ]
 
 
@@ -36,6 +37,37 @@ class Capability(StrEnum):
     VISION = "vision"
     EMBEDDINGS = "embeddings"
     COST_REPORTING = "cost_reporting"
+
+
+class RoutingObjective(StrEnum):
+    """What model routing optimises for among the models that can serve a turn.
+
+    Deliberately small and deliberately not a number. A weight vector would be
+    more expressive and far less operable: nobody can predict what
+    ``cost=0.7, latency=0.3`` will choose, and nobody can explain afterwards why
+    it chose it. These four are answerable from a log line.
+
+    Filtering is not expressed here. A turn that needs tool calling needs it
+    under every objective, so capability and context-window limits are
+    constraints rather than preferences.
+    """
+
+    #: Honour the agent's declared model when it remains viable. The default,
+    #: because an agent's configuration is an explicit choice by whoever wrote
+    #: it, and overriding that silently is worse than a slightly higher bill.
+    BALANCED = "balanced"
+
+    #: Cheapest model that can do the job, by published token pricing.
+    LOWEST_COST = "lowest_cost"
+
+    #: Largest context window. For turns whose input is the constraint —
+    #: long documents, deep histories — rather than the reasoning.
+    LARGEST_CONTEXT = "largest_context"
+
+    #: Most capable, approximated by the widest declared capability set. An
+    #: approximation and named as one: the platform has no quality score, and
+    #: inventing one from cost would encode "expensive means good".
+    HIGHEST_CAPABILITY = "highest_capability"
 
 
 class HealthStatus(StrEnum):

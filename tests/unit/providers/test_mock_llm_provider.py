@@ -47,10 +47,35 @@ class TestContractConformance:
         assert isinstance(provider, LLMProvider)
 
     def test_it_declares_only_what_it_implements(self, provider: MockLLMProvider) -> None:
-        """Claiming tool calling would make the runtime route work it cannot do."""
+        """Claiming a capability makes the runtime route work here that would then fail.
+
+        Tool calling is declared because it is genuinely implemented — see
+        `_maybe_tool_call`, which both `generate` and `stream` go through. This
+        test asserted the opposite until model routing began reading capability
+        declarations and caught the disagreement.
+        """
         assert provider.supports(Capability.STREAMING) is True
-        assert provider.supports(Capability.TOOL_CALLING) is False
+        assert provider.supports(Capability.TOOL_CALLING) is True
         assert provider.supports(Capability.VISION) is False
+        assert provider.supports(Capability.STRUCTURED_OUTPUT) is False
+
+    async def test_what_it_declares_matches_what_its_model_advertises(
+        self,
+        provider: MockLLMProvider,
+    ) -> None:
+        """The invariant that actually broke.
+
+        `supports()` and `list_models()` answered from two hand-maintained
+        lists, and they drifted: the provider emitted tool calls while its
+        catalogue entry said it could not. Nothing read the catalogue, so
+        nothing noticed — until routing started filtering on it and every
+        tool-using turn became unroutable.
+        """
+        (model,) = await provider.list_models()
+
+        declared = {capability for capability in Capability if provider.supports(capability)}
+
+        assert declared == set(model.capabilities)
 
     async def test_it_is_always_healthy(self, provider: MockLLMProvider) -> None:
         health = await provider.health_check()

@@ -238,9 +238,19 @@ class AzureFoundryProvider:
         resource serves models that support it and models that do not, and
         claiming it universally would route tool work to a model that ignores it.
         """
-        if capability is Capability.TOOL_CALLING:
-            return self._supports_tools
-        return capability in {Capability.STREAMING, Capability.COST_REPORTING}
+        return capability in self._capabilities()
+
+    def _capabilities(self) -> frozenset[Capability]:
+        """The single answer to "what can this deployment do?".
+
+        Read by both :meth:`supports` and :meth:`list_models`. They were computed
+        separately, which is exactly how the mock provider's two answers drifted
+        apart — undetected until routing began filtering on the catalogue.
+        """
+        capabilities = {Capability.STREAMING, Capability.COST_REPORTING}
+        if self._supports_tools:
+            capabilities.add(Capability.TOOL_CALLING)
+        return frozenset(capabilities)
 
     async def close(self) -> None:
         """Close the client and the credential.
@@ -436,10 +446,6 @@ class AzureFoundryProvider:
         One deployment, one model. Enumerating the resource's whole catalogue
         would advertise models this provider is not pointed at and cannot serve.
         """
-        capabilities = {Capability.STREAMING, Capability.COST_REPORTING}
-        if self._supports_tools:
-            capabilities.add(Capability.TOOL_CALLING)
-
         return (
             ModelDescriptor(
                 model_id=self._model_id,
@@ -447,7 +453,7 @@ class AzureFoundryProvider:
                 display_name=self._model_id,
                 deployment_name=self._deployment,
                 endpoint=self._endpoint,
-                capabilities=frozenset(capabilities),
+                capabilities=self._capabilities(),
                 max_context_tokens=self._max_context_tokens,
                 max_output_tokens=self._max_output_tokens,
                 pricing=ModelPricing(

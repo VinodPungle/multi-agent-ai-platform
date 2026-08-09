@@ -37,10 +37,18 @@ from agent_platform.configuration.settings import (
 )
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
-from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
-from agent_platform.registries import AgentRegistry, KeyedRegistry
+from agent_platform.registries import AgentRegistry, KeyedRegistry, ModelRegistry
+from agent_platform.routing.policies import (
+    AvailabilityPolicy,
+    CapabilityPolicy,
+    ContextWindowPolicy,
+    ObjectivePolicy,
+    PinnedModelPolicy,
+)
+from agent_platform.routing.policy_router import PolicyModelRouter
 from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform.search.mock_search_provider import MockSearchProvider
 from agent_platform.tools.internet_search_tool import (
@@ -59,6 +67,7 @@ from agent_platform_sdk.dto.completion import (
     TokenUsage,
 )
 from agent_platform_sdk.dto.message import Message
+from agent_platform_sdk.dto.model import ModelDescriptor
 from agent_platform_sdk.dto.prompt import PromptAsset, PromptVariable
 from agent_platform_sdk.interfaces.agent import Agent
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
@@ -340,6 +349,54 @@ def a_descriptor(**overrides: object) -> AgentDescriptor:
     return AgentDescriptor(**fields)  # type: ignore[arg-type]  # keyword forwarding
 
 
+def a_model_catalogue(*descriptors: ModelDescriptor) -> ModelRegistry:
+    """Build a model registry holding ``descriptors``."""
+    registry: ModelRegistry = KeyedRegistry("model")
+    for descriptor in descriptors:
+        registry.register(descriptor.model_id, descriptor)
+    return registry
+
+
+def a_model(model_id: str, **overrides: Any) -> ModelDescriptor:  # noqa: ANN401
+    """Build a model descriptor with generous, test-friendly defaults.
+
+    Capable and roomy by default so that a test which is not about routing does
+    not have to think about it. Tests that *are* about routing override the
+    field they care about.
+    """
+    fields: dict[str, Any] = {
+        "model_id": model_id,
+        "provider_id": "fake",
+        "display_name": model_id,
+        "capabilities": frozenset(
+            {Capability.STREAMING, Capability.TOOL_CALLING, Capability.COST_REPORTING}
+        ),
+        "max_context_tokens": 128_000,
+        "max_output_tokens": 4_096,
+    }
+    fields.update(overrides)
+    return ModelDescriptor(**fields)
+
+
+def a_model_router(descriptor: AgentDescriptor) -> PolicyModelRouter:
+    """Build the real routing chain over a catalogue containing one model.
+
+    The production chain, not a stub. Routing sits in the path of every turn
+    now, so a stub here would quietly excuse the runtime from working with the
+    thing it actually depends on.
+    """
+    return PolicyModelRouter(
+        models=a_model_catalogue(a_model(descriptor.model_id, provider_id=descriptor.provider_id)),
+        policies=(
+            PinnedModelPolicy(),
+            AvailabilityPolicy(),
+            CapabilityPolicy(),
+            ContextWindowPolicy(),
+            ObjectivePolicy(),
+        ),
+    )
+
+
 class RuntimeStack:
     """Everything a runtime test needs, assembled and individually reachable."""
 
@@ -364,7 +421,7 @@ def _tool_capable_gateway() -> DefaultLLMGateway:
     """A real gateway over the real mock provider, which emits tool calls."""
     provider = MockLLMProvider(chunk_delay_seconds=0.0)
     return DefaultLLMGateway(
-        resolver=ConfiguredProviderResolver((provider,)),
+        resolver=RegistryBackedProviderResolver((provider,), KeyedRegistry("model")),
         clock=ManualClock(),
         retry_policy=RetryPolicy(max_attempts=1),
         timeout_policy=TimeoutPolicy(),
@@ -462,6 +519,11 @@ def build_stack() -> Callable[..., RuntimeStack]:
             prompts=prompts,
             events=LoggingEventPublisher(),
             clock=clock,
+            # The real router over a real catalogue, not a stub returning the
+            # descriptor's model. A stub would agree with whatever the runtime
+            # asked for and prove nothing about the two working together —
+            # which is the failure mode this suite has hit three times.
+            model_router=a_model_router(descriptor),
         )
 
         return RuntimeStack(runtime, gateway, memory, prompts, agents, clock)

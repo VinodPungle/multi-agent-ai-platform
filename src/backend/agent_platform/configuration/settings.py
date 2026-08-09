@@ -34,6 +34,7 @@ from pydantic_settings.sources import DotEnvSettingsSource, PydanticBaseSettings
 from agent_platform_sdk.policies.circuit_breaker import CircuitBreakerPolicy
 from agent_platform_sdk.policies.retry import RetryPolicy
 from agent_platform_sdk.policies.timeout import TimeoutPolicy
+from agent_platform_sdk.types.enums import RoutingObjective
 
 __all__ = [
     "AgentSettings",
@@ -349,6 +350,31 @@ class MemorySettings(BaseModel):
             raise ValueError(message)
 
         return self
+
+
+class RoutingSettings(BaseModel):
+    """Model-routing configuration.
+
+    One setting, and that is the point: ``CLAUDE.md`` requires model selection
+    to be policy-driven and configurable, not that every deployment invent a
+    policy. The chain of rules is fixed in the composition root; what an
+    operator chooses is what it optimises for.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    objective: RoutingObjective = Field(
+        default=RoutingObjective.BALANCED,
+        description=(
+            "What routing optimises for among models that can serve a turn. "
+            "`balanced` honours each agent's configured model, which is the "
+            "safe default: an agent's model is an explicit decision by whoever "
+            "wrote it, and overriding it silently is worse than a marginally "
+            "higher bill. `lowest_cost`, `largest_context` and "
+            "`highest_capability` are opt-in, and every decision they make "
+            "records that they were asked for."
+        ),
+    )
 
 
 class MockProviderSettings(BaseModel):
@@ -858,6 +884,7 @@ class PlatformSettings(BaseSettings):
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    routing: RoutingSettings = Field(default_factory=RoutingSettings)
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)

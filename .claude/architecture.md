@@ -1152,9 +1152,16 @@ classDiagram
         -clock
     }
 
-    class ConfiguredProviderResolver {
+    class RegistryBackedProviderResolver {
         -providers
+        -models
         -default_provider_id
+    }
+
+    class PolicyModelRouter {
+        -models
+        -policies
+        +route(RoutingRequest) RoutingDecision
     }
 
     class AzureAIFoundryProvider {
@@ -1166,13 +1173,16 @@ classDiagram
     }
 
     LLMGateway <|.. DefaultLLMGateway
-    LLMProviderResolver <|.. ConfiguredProviderResolver
+    LLMProviderResolver <|.. RegistryBackedProviderResolver
+    ModelRouter <|.. PolicyModelRouter
     LLMProvider <|.. AzureAIFoundryProvider
     LLMProvider <|.. OpenAICompatibleProvider
 
     DefaultLLMGateway --> LLMProviderResolver : resolves through
     DefaultLLMGateway --> LLMProvider : invokes
-    ConfiguredProviderResolver --> LLMProvider : selects from
+    RegistryBackedProviderResolver --> LLMProvider : selects from
+    PolicyModelRouter --> ModelRegistry : ranks entries of
+    AgentRuntime --> ModelRouter : chooses a model through
 
     AgentRuntime --> LLMGateway : depends on
 ```

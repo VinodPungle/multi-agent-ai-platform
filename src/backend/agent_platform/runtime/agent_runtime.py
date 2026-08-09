@@ -6,7 +6,7 @@ Owns the request lifecycle of ``architecture.md`` §14. What it does, in order:
 Runtime validation           Is the agent registered, and enabled?
 Memory retrieval             Load the conversation
 Prompt assembly              Resolve the prompt asset and its version
-Model selection              Read the model from the descriptor
+Model selection              Ask the router, which applies policy
 Budget enforcement           Refuse work that would breach a policy
 Execution                    Hand a complete request to the workflow engine
 Evaluation                   Record usage, cost and latency
@@ -36,16 +36,19 @@ from agent_platform.registries import AgentRegistry
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_sdk.dto.agent import AgentDescriptor
 from agent_platform_sdk.dto.completion import CompletionChunk, TokenUsage
 from agent_platform_sdk.dto.execution import AgentRequest, AgentResult
 from agent_platform_sdk.dto.message import Message
+from agent_platform_sdk.dto.routing import RoutingDecision, RoutingRequest
 from agent_platform_sdk.events.runtime_events import RuntimeEventName
 from agent_platform_sdk.interfaces.agent import Agent
 from agent_platform_sdk.interfaces.event_publisher import EventPublisher
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
+from agent_platform_sdk.interfaces.model_router import ModelRouter
 from agent_platform_sdk.interfaces.prompt_provider import PromptProvider
 from agent_platform_sdk.interfaces.workflow_engine import WorkflowEngine
-from agent_platform_sdk.types.enums import MessageRole
+from agent_platform_sdk.types.enums import Capability, MessageRole, RoutingObjective
 from agent_platform_shared import new_execution_id
 from agent_platform_shared.clock import Clock
 
@@ -53,6 +56,14 @@ __all__ = ["AgentRuntime", "RuntimeTurn"]
 
 _logger = get_logger(__name__)
 _tracer = get_tracer(__name__)
+
+#: Characters per token, for estimating how much context a turn needs.
+#:
+#: A rule of thumb, and used only as a lower bound. The platform has no
+#: tokenizer, and a wrong estimate in this direction keeps a marginal model
+#: rather than excluding a workable one — the first failure is reported by the
+#: provider, the second would be invisible.
+_CHARACTERS_PER_TOKEN = 4
 
 
 class RuntimeTurn:
@@ -73,11 +84,17 @@ class RuntimeTurn:
         request: AgentRequest,
         context: ExecutionContext,
         conversation_id: str | None,
+        routing: RoutingDecision,
     ) -> None:
         self.agent = agent
         self.request = request
         self.context = context
         self.conversation_id = conversation_id
+        # Carried through rather than recomputed. The reason a model was chosen
+        # belongs on the evaluation record for the turn it applied to, and
+        # re-deciding later could produce a different answer than the one that
+        # actually ran.
+        self.routing = routing
 
 
 class AgentRuntime:
@@ -91,6 +108,7 @@ class AgentRuntime:
         prompts: PromptProvider,
         events: EventPublisher,
         clock: Clock,
+        model_router: ModelRouter,
     ) -> None:
         """Create the runtime.
 
@@ -103,6 +121,10 @@ class AgentRuntime:
             events: Lifecycle event publication.
             clock: Injected time source, so latency and event ordering are
                 deterministic under test.
+            model_router: Decides which model answers the turn. The runtime
+                asks rather than reading the descriptor directly, so a routing
+                policy can be changed by configuration without this file
+                knowing that policies exist.
         """
         self._agents = agents
         self._workflow_engine = workflow_engine
@@ -110,6 +132,7 @@ class AgentRuntime:
         self._prompts = prompts
         self._events = events
         self._clock = clock
+        self._model_router = model_router
 
     # -- Lifecycle ---------------------------------------------------------
 
@@ -119,6 +142,8 @@ class AgentRuntime:
         user_input: str,
         context: ExecutionContext,
         conversation_id: str | None = None,
+        pinned_model_id: str | None = None,
+        objective: RoutingObjective = RoutingObjective.BALANCED,
     ) -> RuntimeTurn:
         """Validate, assemble context and enforce policy for one turn.
 
@@ -126,8 +151,20 @@ class AgentRuntime:
         that is about to open a stream can fail properly first; see
         :class:`RuntimeTurn`.
 
+        Args:
+            agent_id: Agent to run.
+            user_input: The user's message.
+            context: Request-scoped context, narrowed to the turn here.
+            conversation_id: Conversation to load history from and record into.
+            pinned_model_id: Overrides routing for this turn. Deliberately a
+                runtime parameter and **not** exposed on the public HTTP API:
+                choosing a model is choosing a bill, and there is no
+                authorisation layer yet to decide who may. Workflows and
+                operator tooling can use it; anonymous callers cannot.
+            objective: What routing should optimise for among viable models.
+
         Raises:
-            NotFoundError: no such agent.
+            NotFoundError: no such agent, or no model can serve the turn.
             PolicyViolationError: the agent is disabled, or a budget forbids the
                 turn.
             ValidationError: the prompt is missing a required variable.
@@ -135,11 +172,25 @@ class AgentRuntime:
         agent = self._resolve_agent(agent_id)
         descriptor = agent.descriptor
 
+        history = await self._load_history(conversation_id, context)
+        decision = await self._route(
+            descriptor,
+            user_input,
+            history,
+            context,
+            pinned_model_id,
+            objective,
+        )
+
         execution_context = context.derive(
             agent_id=descriptor.agent_id,
             execution_id=context.execution_id or new_execution_id(),
-            model_id=descriptor.model_id,
-            provider_id=descriptor.provider_id,
+            # From the decision, not the descriptor. The descriptor holds a
+            # preference; this is what was actually chosen, and everything
+            # downstream — telemetry, cost attribution, the evaluation record —
+            # joins on it.
+            model_id=decision.model_id,
+            provider_id=decision.provider_id,
             prompt_version=descriptor.prompt_version,
         )
 
@@ -149,7 +200,6 @@ class AgentRuntime:
             payload={"input_characters": len(user_input)},
         )
 
-        history = await self._load_history(conversation_id, execution_context)
         prompt = await self._prompts.get(descriptor.prompt_id, descriptor.prompt_version)
 
         self._enforce_pre_execution_budget(descriptor, history, execution_context)
@@ -159,12 +209,12 @@ class AgentRuntime:
             history=history,
             prompt=prompt,
             variables={"locale": execution_context.locale},
-            model_id=descriptor.model_id,
+            model_id=decision.model_id,
             temperature=descriptor.temperature,
             max_output_tokens=descriptor.max_output_tokens,
         )
 
-        return RuntimeTurn(agent, request, execution_context, conversation_id)
+        return RuntimeTurn(agent, request, execution_context, conversation_id, decision)
 
     async def execute(self, turn: RuntimeTurn) -> AgentResult:
         """Run a prepared turn to completion and record it.
@@ -285,6 +335,49 @@ class AgentRuntime:
         return self._agents.keys()
 
     # -- Internals ---------------------------------------------------------
+
+    async def _route(
+        self,
+        descriptor: AgentDescriptor,
+        user_input: str,
+        history: tuple[Message, ...],
+        context: ExecutionContext,
+        pinned_model_id: str | None,
+        objective: RoutingObjective,
+    ) -> RoutingDecision:
+        """Ask the router which model should answer this turn.
+
+        Two constraints are derived here because only the runtime knows them:
+
+        **Tool calling** is required when the agent declares tools. Routing to a
+        model that cannot call them would produce an agent that silently stops
+        searching — a wrong answer rather than an error, which is the worse
+        failure.
+
+        **Context size** is estimated from the characters about to be sent. It
+        is a floor, not a forecast: the platform has no tokenizer, and four
+        characters per token errs towards *under*-estimating, which risks
+        keeping a model that is marginally too small rather than excluding one
+        that would have worked. Of the two errors, the first is reported by the
+        provider and the second is invisible.
+        """
+        required: set[Capability] = set()
+        if descriptor.tool_ids:
+            required.add(Capability.TOOL_CALLING)
+
+        characters = len(user_input) + sum(len(message.content) for message in history)
+
+        return await self._model_router.route(
+            RoutingRequest(
+                agent_id=descriptor.agent_id,
+                preferred_model_id=descriptor.model_id,
+                pinned_model_id=pinned_model_id,
+                required_capabilities=frozenset(required),
+                minimum_context_tokens=characters // _CHARACTERS_PER_TOKEN,
+                objective=objective,
+            ),
+            context,
+        )
 
     def _resolve_agent(self, agent_id: str) -> Agent:
         """Return a registered, enabled agent.

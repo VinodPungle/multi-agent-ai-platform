@@ -29,7 +29,8 @@ from agent_platform.exceptions.base import (
     ValidationError,
 )
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
-from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.gateway.registry_resolver import RegistryBackedProviderResolver
+from agent_platform.registries import KeyedRegistry
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
 from agent_platform_sdk.dto.completion import (
@@ -175,7 +176,11 @@ def build_gateway(
 ) -> DefaultLLMGateway:
     """Assemble a gateway over ``providers`` with fast, deterministic policies."""
     return DefaultLLMGateway(
-        resolver=ConfiguredProviderResolver(providers, default_provider_id=default_provider_id),
+        resolver=RegistryBackedProviderResolver(
+            providers,
+            KeyedRegistry("model"),
+            default_provider_id=default_provider_id,
+        ),
         clock=clock or ManualClock(),
         # Sub-millisecond backoff without jitter: retry *behaviour* is what is
         # under test, not how long the platform waits between attempts.
@@ -191,7 +196,9 @@ class TestContractConformance:
         assert isinstance(build_gateway(FakeLLMProvider()), LLMGateway)
 
     def test_resolver_satisfies_the_resolver_contract(self) -> None:
-        assert isinstance(ConfiguredProviderResolver(), LLMProviderResolver)
+        assert isinstance(
+            RegistryBackedProviderResolver((), KeyedRegistry("model")), LLMProviderResolver
+        )
 
     def test_fake_provider_satisfies_the_provider_contract(self) -> None:
         """Structural typing: the fake inherits nothing from the platform."""
@@ -273,12 +280,16 @@ class TestProviderResolution:
 
     def test_duplicate_provider_ids_are_rejected_at_construction(self) -> None:
         with pytest.raises(ConfigurationError, match="Duplicate LLM provider id"):
-            ConfiguredProviderResolver((FakeLLMProvider("same"), FakeLLMProvider("same")))
+            RegistryBackedProviderResolver(
+                (FakeLLMProvider("same"), FakeLLMProvider("same")), KeyedRegistry("model")
+            )
 
     def test_a_default_naming_an_unregistered_provider_is_rejected(self) -> None:
         """A typo in configuration must fail at startup, not on a user's request."""
         with pytest.raises(ConfigurationError, match="is not registered"):
-            ConfiguredProviderResolver((FakeLLMProvider("real"),), default_provider_id="typo")
+            RegistryBackedProviderResolver(
+                (FakeLLMProvider("real"),), KeyedRegistry("model"), default_provider_id="typo"
+            )
 
 
 class TestRequestValidation:
