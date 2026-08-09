@@ -21,6 +21,7 @@ an hour earlier.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
@@ -348,6 +349,144 @@ class MemorySettings(BaseModel):
                 "set. Redis uses the identity's object id as the username."
             )
             raise ValueError(message)
+
+        return self
+
+
+class MCPServerSettings(BaseModel):
+    """One Model Context Protocol server the platform draws tools from.
+
+    Supplied as JSON in ``PLATFORM_MCP__SERVERS``, because a list of structured
+    objects has no readable flat-environment-variable form and inventing one
+    (``PLATFORM_MCP__SERVERS__0__URL``) is worse than the JSON.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    server_id: str = Field(
+        min_length=1,
+        description=(
+            "Platform-side identifier. Namespaces this server's tool ids as "
+            "`mcp.<server_id>.<tool>`, so two servers can each expose a tool "
+            "called `search` without one silently winning."
+        ),
+    )
+    url: str = Field(
+        min_length=1,
+        description="The server's Streamable HTTP endpoint.",
+    )
+    auth_header_name: str = Field(
+        default="Authorization",
+        description="Header carrying the credential, for servers that need one.",
+    )
+    auth_header_value: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Credential for the server. Empty means the server is "
+            "unauthenticated. A `SecretStr`, and never logged — it belongs in "
+            "Key Vault in a deployed environment."
+        ),
+    )
+    timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Per-call budget. A third-party server that hangs would otherwise "
+            "hold a chat turn open for as long as it likes."
+        ),
+    )
+    is_enabled: bool = Field(
+        default=True,
+        description="Set false to stop using a server without deleting its configuration.",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _require_http(cls, value: str) -> str:
+        """Reject anything that is not an HTTP(S) endpoint.
+
+        The platform speaks Streamable HTTP only. A `stdio` server means
+        spawning a subprocess inside a container, which is a supply-chain and
+        isolation decision rather than an integration — and silently ignoring
+        such a URL would look like a server that simply had no tools.
+        """
+        if not value.startswith(("http://", "https://")):
+            message = (
+                f"MCP server URL must be http:// or https://, got {value!r}. "
+                "Only the Streamable HTTP transport is supported."
+            )
+            raise ValueError(message)
+        return value
+
+
+class MCPSettings(BaseModel):
+    """Model Context Protocol configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Draw tools from MCP servers. Off by default: an MCP server is a "
+            "third party whose tool descriptions become prompt material and "
+            "whose tools can have side effects, so connecting to one is an "
+            "explicit decision."
+        ),
+    )
+    servers: Annotated[tuple[MCPServerSettings, ...], NoDecode] = Field(
+        default=(),
+        description="Servers to discover tools from. JSON array in the environment.",
+    )
+
+    @field_validator("servers", mode="before")
+    @classmethod
+    def _parse_servers(cls, value: object) -> object:
+        """Accept a JSON array from the environment.
+
+        pydantic-settings decodes complex fields from the environment before
+        validators run, which is why this field carries `NoDecode`. Without it a
+        malformed value produces a parse error naming neither the setting nor
+        what was expected — a trap this codebase has now hit five times.
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return ()
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as error:
+                message = (
+                    "PLATFORM_MCP__SERVERS must be a JSON array of objects, e.g. "
+                    '[{"server_id": "github", "url": "https://..."}]. '
+                    f"Could not parse it: {error}"
+                )
+                raise ValueError(message) from error
+        return value
+
+    @model_validator(mode="after")
+    def _require_servers_when_enabled(self) -> Self:
+        """Fail at startup when MCP is on and pointed at nothing.
+
+        The alternative is a platform that starts, reports healthy, and quietly
+        offers no MCP tools — indistinguishable from MCP being switched off,
+        which is exactly the confusion an operator would waste an afternoon on.
+        """
+        if self.enabled and not any(server.is_enabled for server in self.servers):
+            message = (
+                "mcp.enabled is true but no enabled server is configured. "
+                "Set PLATFORM_MCP__SERVERS, or set PLATFORM_MCP__ENABLED=false."
+            )
+            raise ValueError(message)
+
+        seen: set[str] = set()
+        for server in self.servers:
+            if server.server_id in seen:
+                message = (
+                    f"Duplicate MCP server_id {server.server_id!r}. Ids namespace "
+                    "tool ids, so duplicates would collide."
+                )
+                raise ValueError(message)
+            seen.add(server.server_id)
 
         return self
 
@@ -885,6 +1024,7 @@ class PlatformSettings(BaseSettings):
     llm_gateway: LLMGatewaySettings = Field(default_factory=LLMGatewaySettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)

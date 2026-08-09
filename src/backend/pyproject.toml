@@ -41,6 +41,8 @@ dependencies = [
     "azure-ai-inference>=1.0.0b9",
     "azure-identity>=1.19.0",
     "redis>=5.2.0",
+    "mcp>=2.0.0",
+    "jsonschema>=4.23.0",
 ]
 
 [project.scripts]

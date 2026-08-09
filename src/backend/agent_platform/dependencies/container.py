@@ -56,6 +56,8 @@ from agent_platform.search.tavily_search_provider import TavilySearchProvider
 from agent_platform.security.credentials import build_azure_credential
 from agent_platform.tools.delegate_tool import DelegateToAgentTool
 from agent_platform.tools.internet_search_tool import InternetSearchTool
+from agent_platform.tools.mcp.discovery import build_mcp_session
+from agent_platform.tools.mcp.session import MCPSession
 from agent_platform.tools.tool_executor import ToolExecutor
 from agent_platform.workflow.direct_engine import DirectWorkflowEngine
 from agent_platform.workflow.langgraph_engine import LangGraphWorkflowEngine
@@ -77,6 +79,7 @@ __all__ = [
     "build_agent_registry",
     "build_health_probes",
     "build_llm_providers",
+    "build_mcp_sessions",
     "build_memory_provider",
     "build_model_registry",
     "build_model_router",
@@ -281,6 +284,19 @@ def build_tool_registry(
     return registry
 
 
+def build_mcp_sessions(settings: PlatformSettings) -> tuple[MCPSession, ...]:
+    """Return a session for every enabled MCP server.
+
+    Construction only — nothing connects here. Discovery is an async call and
+    happens during startup, which is also the only place a third party's
+    availability should be able to affect anything.
+    """
+    if not settings.mcp.enabled:
+        return ()
+
+    return tuple(build_mcp_session(server) for server in settings.mcp.servers if server.is_enabled)
+
+
 def build_workflow_engine(
     settings: PlatformSettings,
     tool_executor: ToolExecutor,
@@ -440,6 +456,10 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: is built before the runtime, and the runtime needs the registry. Passing
     #: the provider defers resolution to the first delegation, by which time
     #: everything exists.
+    #: Sessions for the configured MCP servers. Empty unless MCP is enabled.
+    #: Nothing connects here: discovery runs during startup.
+    mcp_sessions = providers.Singleton(build_mcp_sessions, settings)
+
     tool_registry = providers.Singleton(
         build_tool_registry,
         settings,

@@ -16,6 +16,7 @@ from __future__ import annotations
 from agent_platform.dependencies.container import ApplicationContainer
 from agent_platform.exceptions.base import ConfigurationError
 from agent_platform.telemetry.logging import get_logger
+from agent_platform.tools.mcp.discovery import discover_mcp_tools
 from agent_platform_sdk.interfaces.provider import Provider
 
 __all__ = ["shutdown_platform", "start_platform"]
@@ -35,6 +36,7 @@ async def start_platform(container: ApplicationContainer) -> None:
         await component.initialize()
 
     await _populate_model_registry(container)
+    await _register_mcp_tools(container)
     _validate_agents(container)
 
     _logger.info(
@@ -103,6 +105,42 @@ async def _populate_model_registry(container: ApplicationContainer) -> None:
                 )
                 continue
             registry.register(model.model_id, model)
+
+
+async def _register_mcp_tools(container: ApplicationContainer) -> None:
+    """Add every tool the configured MCP servers advertise.
+
+    Discovery happens once, here, because a tool's description is prompt
+    material: discovering per request would make the prompt vary with a third
+    party's deployment schedule, so two identical questions could get different
+    answers for reasons invisible in the request.
+
+    Registered into the same registry as every local tool, under
+    ``mcp.<server>.<name>``. Nothing downstream distinguishes them — an agent
+    lists one in its ``tool_ids`` exactly as it lists ``internet-search``.
+
+    A server that is unreachable contributes nothing and does not stop startup:
+    it is a third party, and refusing to boot because someone else's service is
+    down would hand them an outage switch.
+    """
+    sessions = container.mcp_sessions()
+    if not sessions:
+        return
+
+    registry = container.tool_registry()
+
+    for tool in await discover_mcp_tools(sessions):
+        if registry.contains(tool.descriptor.tool_id):
+            # Ids are namespaced by server, so this means one server advertised
+            # the same tool name twice. That is the server's bug; keeping the
+            # first is the same rule the model registry applies.
+            _logger.warning(
+                "mcp.duplicate_tool_id",
+                tool_id=tool.descriptor.tool_id,
+                detail="Already registered; keeping the first.",
+            )
+            continue
+        registry.register(tool.descriptor.tool_id, tool)
 
 
 def _validate_agents(container: ApplicationContainer) -> None:

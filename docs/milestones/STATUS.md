@@ -1366,13 +1366,79 @@ not merely get recorded, it changed which provider answered.
 5. **The chain itself is not configurable**, only the objective. Deliberate: a
    deployment must not be able to remove a constraint by accident.
 
+### MCP tools ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Tools on MCP servers are usable by agents | ✅ | Live: a real server's tool executed through the tool executor |
+| Nothing outside the adapter changed | ✅ | Runtime, tool executor, tool loop, workflow engine and agents untouched |
+| An agent uses one by configuration alone | ✅ | `tool_ids=("mcp.directory.lookup_employee",)` — no code names it |
+| A dead server does not stop the platform | ✅ | Discovery failures are logged and skipped; proven against a refused port |
+| Arguments are validated before a remote call | ✅ | `jsonschema` against the server's own schema |
+| The SDK is confined to one module | ✅ | `streamable_http_session.py`; everything above speaks platform types |
+
+**The adapter claim from ADR-0010 is now demonstrated rather than asserted.** An
+MCP tool is resolved through the registry, validated, timed, retried, logged,
+traced and budgeted by exactly the same code path as `internet-search`. The
+alternative — a second tool interface — would have meant a second execution path
+and every runtime policy implemented twice.
+
+```
+registered tools: ('internet-search', 'delegate-to-agent', 'mcp.directory.lookup_employee')
+description: Look up an employee in the corporate directory.
+schema properties: ['name']
+executed: succeeded=True output={'content': 'Vinod works in Platform Engineering, based in Oslo.', ...}
+health: healthy — MCP tool 'lookup_employee' on 'directory'
+```
+
+**The hardest bug in this milestone, and a fake could never have found it.**
+When an MCP server is unreachable, the SDK unwinds its anyio cancel scopes by
+cancelling the running task, and what escapes is a bare `CancelledError` —
+**indistinguishable** from a caller cancelling the request. Measured on both
+paths, `Task.cancelling()` is `1` and `Task.uncancel()` returns `0`.
+
+Before the fix, an unreachable MCP server raised `CancelledError` straight
+through discovery's `except PlatformError` and **stopped the platform from
+starting** — the exact guarantee the design makes. The fix is structural: each
+SDK operation runs in its own task, awaited through `asyncio.shield`, so the
+inner task being cancelled means the server is unreachable while this task being
+cancelled means the caller stopped us. Both branches are tested against a real
+server.
+
+Three earlier attempts were wrong in instructive ways — wrapping only the inner
+call, then a hand-written `__aenter__`/`__aexit__` pair (anyio: *"attempted to
+exit cancel scope in a different task"*), then `Task.cancelling()` as a
+discriminator. None of it is reachable through a fake, which has no connect to
+fail.
+
+**Two SDK renames were caught by introspecting the installed package** rather
+than writing from memory: `streamablehttp_client` → `streamable_http_client`,
+and `inputSchema` → `input_schema`. The second is the dangerous one — reading
+the wrong attribute yields an empty schema with no error, and a model told the
+tool takes no arguments.
+
+**Known limitations.**
+
+1. **A handshake per tool call.** Sessions are not pooled — see ADR-0014 for why
+   pooling was rejected on lifetime correctness, and where it would go.
+2. **Streamable HTTP only.** `stdio` means spawning a subprocess inside the
+   container; refused at configuration time rather than ignored.
+3. **No OAuth.** A configured header only. Who consents, on whose behalf, with
+   what audit trail is a governance decision, and `CLAUDE.md` defers
+   authorisation.
+4. **Discovery is at startup.** A tool added mid-run is not seen until a
+   restart; a tool that disappeared is reported by the health check.
+5. **No retries.** A remote tool may have side effects and the protocol carries
+   no idempotency signal.
+6. **Not yet used against a third-party server.** Verified against a real MCP
+   server over real HTTP, but one the test suite starts itself.
+
 ### Deferred, and why
 
 | Capability | Why not now |
 | --- | --- |
 | RAG, embeddings, vector store | Needs an embedding provider and a vector database, neither provisioned. A RAG pipeline with no corpus is a demo, and retrieval quality cannot be judged without real documents |
 | Knowledge graph | Same, plus no source data exists to build one from |
-| MCP tools | Genuinely adapter-shaped and the smallest of these. Deferred only because it is worth doing after there is a second tool worth exposing |
 | RBAC and governance | `CLAUDE.md` says explicitly: "Do not implement authorization now. Ensure architecture supports it." Following that instruction |
 | Marketplace, scheduler, workflow designer, dashboards | Product surfaces, each larger than everything delivered in this milestone |
 
