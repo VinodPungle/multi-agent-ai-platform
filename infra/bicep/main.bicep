@@ -101,6 +101,30 @@ param frontendMinReplicas int = 0
 @minValue(1)
 param frontendMaxReplicas int = 3
 
+// -----------------------------------------------------------------------------
+// Conversation memory
+// -----------------------------------------------------------------------------
+// Off by default, and that is a cost decision rather than a default-off habit:
+// a cache bills continuously whether or not anyone is chatting, so an
+// environment that scales to zero should not pay for one unless it genuinely
+// wants durable history.
+
+@description('Provision Azure Cache for Redis and use it for conversation memory. When false the platform keeps history in-process, which is lost on restart and not shared between replicas.')
+param provisionRedis bool = false
+
+@description('Redis SKU tier. Basic has no replica and no SLA - see modules/redis.bicep.')
+@allowed(['Basic', 'Standard', 'Premium'])
+param redisSkuName string = 'Standard'
+
+@description('Redis cache size. 0 is 250 MB, which holds a great many conversations.')
+@minValue(0)
+@maxValue(6)
+param redisSkuCapacity int = 0
+
+@description('How long a conversation survives without a write, refreshed on every write.')
+@minValue(300)
+param redisTtlSeconds int = 86400
+
 @description('Create alert rules. Off where nobody is on call - a channel that pages during development gets muted, and it is the same channel production uses.')
 param enableAlerts bool = false
 
@@ -229,6 +253,32 @@ module containerAppsEnvironment 'modules/container-apps-environment.bicep' = {
     logAnalyticsResourceId: monitoring.outputs.logAnalyticsResourceId
   }
 }
+
+// -----------------------------------------------------------------------------
+// Conversation memory
+// -----------------------------------------------------------------------------
+// Entra authentication, so nothing secret is produced here and nothing has to
+// be written to the vault. The identity is granted a data access policy inside
+// the module.
+
+module redis 'modules/redis.bicep' = if (provisionRedis) {
+  name: 'redis'
+  scope: resourceGroup
+  params: {
+    name: 'redis-${resourcePrefix}-${resourceToken}'
+    location: location
+    tags: tags
+    principalId: identity.outputs.principalId
+    skuName: redisSkuName
+    skuFamily: redisSkuName == 'Premium' ? 'P' : 'C'
+    skuCapacity: redisSkuCapacity
+  }
+}
+
+// The identity's object id doubles as the Redis username under Entra
+// authentication - see agent_platform/memory/entra_credentials.py.
+var memoryProvider = provisionRedis ? 'redis' : 'in-memory'
+var redisUrl = provisionRedis ? redis!.outputs.url : ''
 
 // -----------------------------------------------------------------------------
 // Inference
@@ -371,6 +421,14 @@ module backendApp 'modules/container-app.bicep' = {
       // The mock answers with templated text. Configuration validation rejects
       // it outside development, and this makes that explicit.
       { name: 'PLATFORM_MOCK_PROVIDER__ENABLED', value: string(!foundryEnabled) }
+      // Conversation memory. `redis` is durable and shared between replicas;
+      // `in-memory` is per-process and loses history on every restart.
+      { name: 'PLATFORM_MEMORY__PROVIDER', value: memoryProvider }
+      { name: 'PLATFORM_MEMORY__REDIS_URL', value: redisUrl }
+      // Entra, never an access key. The username is the identity's object id.
+      { name: 'PLATFORM_MEMORY__REDIS_AUTH_MODE', value: provisionRedis ? 'entra' : 'url' }
+      { name: 'PLATFORM_MEMORY__REDIS_PRINCIPAL_ID', value: identity.outputs.principalId }
+      { name: 'PLATFORM_MEMORY__REDIS_TTL_SECONDS', value: string(redisTtlSeconds) }
       { name: 'PLATFORM_FEATURES__STREAMING', value: 'true' }
       { name: 'PLATFORM_FEATURES__MEMORY', value: 'true' }
       { name: 'PLATFORM_FEATURES__EVALUATION', value: 'true' }
@@ -464,6 +522,12 @@ output AZURE_KEY_VAULT_ENDPOINT string = keyVault.outputs.vaultUri
 
 @description('Application Insights resource name.')
 output AZURE_APPLICATION_INSIGHTS_NAME string = monitoring.outputs.applicationInsightsName
+
+@description('Conversation memory backend actually in effect.')
+output PLATFORM_MEMORY_PROVIDER string = memoryProvider
+
+@description('Redis hostname, empty when no cache was provisioned. Not a secret: authentication is by Entra token, so there is no password to disclose.')
+output AZURE_REDIS_HOST string = provisionRedis ? redis!.outputs.hostName : ''
 
 @description('Public URL of the chat interface.')
 output SERVICE_FRONTEND_URI string = frontendApp.outputs.uri

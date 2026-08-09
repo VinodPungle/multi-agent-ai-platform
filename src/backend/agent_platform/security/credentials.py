@@ -39,6 +39,14 @@ _logger = get_logger(__name__)
 #: 401 whose message says nothing about scopes.
 COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
 
+#: OAuth scope for the Azure Cache for Redis data plane.
+#:
+#: A different audience from the management plane. A token issued for
+#: `https://management.azure.com/.default` authenticates every ARM call about
+#: the cache and none of the commands against it, which fails as a bare
+#: `WRONGPASS` with nothing pointing at the scope.
+REDIS_SCOPE = "https://redis.azure.com/.default"
+
 
 def build_azure_credential() -> DefaultAzureCredential:
     """Return the credential chain for this environment.

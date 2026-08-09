@@ -43,3 +43,9 @@ param aiFoundryModelVersion = '1'
 param aiFoundryDeploymentSku = 'DataZoneStandard'
 param aiFoundryDeploymentCapacity = 25
 param platformModelId = 'fw-kimi-k3'
+
+// In-process memory. History is lost on restart, which on a developer
+// environment that scales to zero happens constantly — and that is the right
+// trade against paying for a cache nobody is using. Compose runs a real Redis
+// locally for anyone who wants to exercise the durable path.
+param provisionRedis = false

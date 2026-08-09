@@ -33,3 +33,7 @@ param searchProvider = 'mock'
 // provisioning one would be paying for capacity to sit idle.
 param provisionAiFoundry = false
 param aiFoundryEndpoint = ''
+
+// No cache. Tests that need durable memory drive the provider directly against
+// a local Redis; paying for one here would buy nothing.
+param provisionRedis = false

@@ -1233,13 +1233,70 @@ container self-reference giving the tool a lazy accessor, rather than mutating
 a constructed object — which would leave a window where the tool exists and
 cannot work.
 
+### Long-term memory ✅
+
+| Criterion | Status | How it was verified |
+| --- | --- | --- |
+| Conversations survive a restart | ✅ | Real `redis:7-alpine`: a *second client* read back history the first one wrote |
+| Conversations are shared between replicas | ✅ | Same test — a new connection is the same proof as a new replica |
+| Switching backend is configuration only | ✅ | `MemorySettings.provider`; no agent, runtime or workflow file changed |
+| A failed backend does not fail chat | ✅ | Reads degrade to empty, writes are swallowed, health reports DEGRADED |
+| Deployable to Azure | ✅ | `modules/redis.bicep`; template compiles, all four `.bicepparam` files validate |
+| No new secret | ✅ | Entra ID data-plane auth. Nothing in Key Vault, no password in any URL |
+
+**The failure posture is the decision worth keeping.** A memory backend that is
+down must not take chat down with it. Losing history is visible to the user and
+survivable; losing the turn is neither. `health_check` therefore reports
+DEGRADED rather than UNHEALTHY — UNHEALTHY would fail readiness and remove a
+replica that can still answer every request, turning a degraded cache into an
+outage.
+
+**Entra rather than an access key** was the more expensive choice and the right
+one. The conventional pattern puts the cache's primary key in Key Vault and
+interpolates it into a connection URL; it works, and it means holding a
+long-lived credential for a service that does not require one. The cost was a
+credential provider with token caching and a refresh margin — and one real sharp
+edge: redis-py authenticates on *connect*, not continuously, so Azure closes a
+pooled connection when its token expires. Handled with retries and a health
+check interval, and documented rather than glossed. See
+[ADR-0012](../adr/0012-durable-conversation-memory.md).
+
+**Verified twice, deliberately.** The suite runs on `fakeredis` so CI needs no
+server. That was not accepted as sufficient: this project has three recorded
+instances of a test double being more accommodating than the real thing, and
+durability across a *new connection* is precisely what an in-process fake cannot
+honestly demonstrate. Against a real container:
+
+```
+health: healthy
+stored (cap 4): ['m2', 'm3', 'm4', 'm5']
+roles preserved: ['user', 'assistant', 'user', 'assistant']
+survives a new connection: ['m2', 'm3', 'm4', 'm5']
+after delete: ()
+```
+
+**Known limitations.**
+
+1. **Access keys are not disabled on the cache.** Classic Azure Cache for Redis
+   has no switch to disable them, unlike Foundry. Nothing in the platform uses
+   them, but they exist.
+2. **`search` returns recency, not relevance.** The contract permits a
+   documented fallback and this is one. Semantic search needs the embedding
+   provider and vector index that do not exist yet.
+3. **`summarize` returns `None`.** A memory provider that called a model would
+   couple storage to inference. The runtime falls back to truncation.
+4. **Off by default in every environment except staging and production.** A
+   cache bills continuously with no idle state, so durable memory is a
+   deliberate purchase per environment.
+5. **Not yet exercised in Azure.** The module compiles and the parameters
+   validate; no environment has been provisioned with `provisionRedis = true`.
+
 ### Deferred, and why
 
 | Capability | Why not now |
 | --- | --- |
 | RAG, embeddings, vector store | Needs an embedding provider and a vector database, neither provisioned. A RAG pipeline with no corpus is a demo, and retrieval quality cannot be judged without real documents |
 | Knowledge graph | Same, plus no source data exists to build one from |
-| Long-term memory | The right fix for the in-process memory gap, and it needs Redis or Cosmos DB. Doing it properly is a milestone, not an afternoon |
 | MCP tools | Genuinely adapter-shaped and the smallest of these. Deferred only because it is worth doing after there is a second tool worth exposing |
 | Model routing by policy | Small and worthwhile. Deferred for honesty about remaining scope rather than difficulty |
 | RBAC and governance | `CLAUDE.md` says explicitly: "Do not implement authorization now. Ensure architecture supports it." Following that instruction |

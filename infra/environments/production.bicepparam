@@ -53,3 +53,12 @@ param enableAlerts = true
 param alertNotificationEmail = ''
 param latencyThresholdMs = 30000
 param hourlyTokenThreshold = 1000000
+
+// Durable, replicated conversation memory. Standard rather than Basic is the
+// point: Basic is a single node with no SLA, and Azure restarting it for
+// patching would drop every active conversation's context at a moment nobody
+// chose.
+param provisionRedis = true
+param redisSkuName = 'Standard'
+param redisSkuCapacity = 1
+param redisTtlSeconds = 86400

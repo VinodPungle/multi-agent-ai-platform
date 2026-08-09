@@ -22,6 +22,7 @@ One resource group per environment, containing:
 | Container Apps environment | Shared runtime |
 | Container App × 2 | Backend and frontend |
 | AI Foundry account + model deployment | Inference, with local auth **disabled** |
+| Azure Cache for Redis | Durable conversation memory. Only when `provisionRedis` is true |
 
 Names are derived from a hash of subscription, environment and region, so two
 environments never collide and nobody invents a name by hand.
@@ -92,6 +93,16 @@ Key Vault.
 `disableLocalAuth: true`, so API keys cannot be used even by someone who wants
 to. The app authenticates with its managed identity.
 
+**Redis** has no key in the deployment either. The cache is provisioned with
+Entra authentication enabled and the workload identity granted a **Data Owner**
+access policy; the app connects with a token from the same credential chain
+everything else uses. `AZURE_REDIS_HOST` is a deployment output precisely
+because it discloses nothing.
+
+Access keys still *exist* on the cache — classic Azure Cache for Redis has no
+switch to disable them, unlike Foundry. Nothing in the platform uses them. See
+[ADR-0012](../adr/0012-durable-conversation-memory.md).
+
 Both container secrets are Key Vault *references*, resolved by the managed
 identity when a revision starts. The values are never in the container's
 environment definition, so `az containerapp show` does not disclose them.
@@ -102,12 +113,12 @@ environment definition, so `az containerapp show` does not disclose them.
 
 Four, each with independent resources, configuration, secrets and monitoring:
 
-| Environment | Model | Search | Min replicas | Retention |
-| --- | --- | --- | --- | --- |
-| `development` | Foundry | duckduckgo (keyless) | 0 — scales to zero | 30 days |
-| `testing` | **none** — mock provider | mock | 0 | 30 days |
-| `staging` | Foundry | tavily | 1 | 60 days |
-| `production` | Foundry | tavily | 1 | 90 days |
+| Environment | Model | Search | Memory | Min replicas | Retention |
+| --- | --- | --- | --- | --- | --- |
+| `development` | Foundry | duckduckgo (keyless) | in-process | 0 — scales to zero | 30 days |
+| `testing` | **none** — mock provider | mock | in-process | 0 | 30 days |
+| `staging` | Foundry | tavily | Redis (Standard C0) | 1 | 60 days |
+| `production` | Foundry | tavily | Redis (Standard C1) | 1 | 90 days |
 
 Parameters live in [`infra/environments/`](../../infra/environments/) as typed
 `.bicepparam` files.
@@ -190,6 +201,7 @@ The resources that cost money while idle:
 | Container Apps | Only above the free grant; zero at `minReplicas: 0` |
 | Log Analytics | Per GB ingested, then per GB retained |
 | AI Foundry deployment | **Depends on SKU.** Provisioned throughput bills whether or not you call it |
+| Azure Cache for Redis | **Bills continuously.** A cache has no idle state — this is why `provisionRedis` defaults to false |
 | Key Vault, ACR, identity | Negligible |
 
 Development and testing scale to zero. Production keeps one replica, because a
@@ -248,6 +260,22 @@ the process having noticed.
 ```bash
 az containerapp revision restart -n <app> -g <rg> --revision <revision>
 ```
+
+**Redis commands fail with `WRONGPASS` but the app is otherwise healthy**
+Under Entra authentication the username must be the **object id of the
+principal**, not the client id of the application. The two are both GUIDs on the
+same identity and the error mentions neither. `PLATFORM_MEMORY__REDIS_PRINCIPAL_ID`
+is set from `identity.outputs.principalId`; confirm it matches:
+
+```bash
+az identity show -n <identity> -g <rg> --query principalId -o tsv
+```
+
+**Conversations lose history intermittently under load**
+Check `PLATFORM_MEMORY__PROVIDER`. If it is `in-memory` with more than one
+replica, that is the expected behaviour and not a bug — each replica has its own
+history and the ingress does not care which one a follow-up reaches. Set
+`provisionRedis = true` for that environment.
 
 **Key Vault name already exists**
 A previous `azd down` without `--purge` left it soft-deleted:

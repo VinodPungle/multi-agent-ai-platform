@@ -21,6 +21,7 @@ costs — the context that is obvious while deciding and lost within months.
 | [0009](./0009-agent-runtime-and-workflow-engine-abstraction.md) | An Agent Runtime, with LangGraph behind a workflow abstraction | Accepted | 03 |
 | [0010](./0010-tool-framework-and-internet-search.md) | A tool framework, with the loop in the workflow layer | Accepted | 04 |
 | [0011](./0011-azure-ai-foundry-provider.md) | The Azure AI Foundry provider, and keyless authentication | Accepted | 05 |
+| [0012](./0012-durable-conversation-memory.md) | Durable conversation memory on Redis, authenticated by Entra ID | Accepted | 09 |
 
 ## Writing one
 

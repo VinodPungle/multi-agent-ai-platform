@@ -46,3 +46,11 @@ param enableAlerts = true
 param alertNotificationEmail = ''
 param latencyThresholdMs = 45000
 param hourlyTokenThreshold = 250000
+
+// Durable memory, same shape as production. A staging environment that keeps
+// history in-process cannot reproduce the class of bug this exists to prevent —
+// a follow-up question landing on a replica that never saw the first one.
+param provisionRedis = true
+param redisSkuName = 'Standard'
+param redisSkuCapacity = 0
+param redisTtlSeconds = 86400

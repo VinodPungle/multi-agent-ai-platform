@@ -24,6 +24,7 @@ from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.memory.entra_credentials import EntraIdRedisCredentialProvider
 from agent_platform.memory.redis_memory import RedisConversationMemoryProvider
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
 from agent_platform.prompts.file_prompt_provider import (
@@ -151,12 +152,24 @@ def build_memory_provider(settings: PlatformSettings) -> MemoryProvider:
     than a change to anything that reads a conversation.
     """
     if settings.memory.provider == "redis":
+        # Entra in a deployed environment, nothing in Compose. Built here rather
+        # than inside the provider so that the provider needs no knowledge of
+        # Azure, and so a test can hand it neither.
+        credential_provider = (
+            EntraIdRedisCredentialProvider(
+                credential=build_azure_credential(),
+                principal_id=settings.memory.redis_principal_id,
+            )
+            if settings.memory.redis_auth_mode == "entra"
+            else None
+        )
         return RedisConversationMemoryProvider(
             # Unwrapped at the single point of use; it travels as a `SecretStr`
             # everywhere else so it cannot be logged by accident.
             url=settings.memory.redis_url.get_secret_value(),
             ttl_seconds=settings.memory.redis_ttl_seconds,
             max_messages_per_conversation=settings.memory.max_messages_per_conversation,
+            credential_provider=credential_provider,
         )
 
     return InMemorySessionMemoryProvider(

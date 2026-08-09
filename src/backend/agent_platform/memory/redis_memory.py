@@ -38,6 +38,7 @@ Failure posture
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -47,6 +48,9 @@ from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.types.enums import Capability, HealthStatus
+
+if TYPE_CHECKING:
+    from redis.credentials import CredentialProvider
 
 __all__ = ["RedisConversationMemoryProvider"]
 
@@ -71,6 +75,7 @@ class RedisConversationMemoryProvider:
         ttl_seconds: int = 86_400,
         max_messages_per_conversation: int = 100,
         client: Redis | None = None,
+        credential_provider: object | None = None,
     ) -> None:
         """Create the provider.
 
@@ -90,6 +95,16 @@ class RedisConversationMemoryProvider:
                 prompt.
             client: Injected client, so tests exercise the whole provider
                 without a server and without patching a global.
+            credential_provider: Supplies credentials on every connect. When
+                set, the URL carries no password and authentication is by Entra
+                token — see
+                :mod:`agent_platform.memory.entra_credentials`. ``None`` means
+                the URL is the whole story, which is the local and Compose case.
+
+                Typed ``object`` rather than redis-py's ``CredentialProvider``
+                because that class is a concrete base, and importing it here to
+                use it as a type would make the provider claim a dependency it
+                only forwards.
         """
         self._url = url
         self._provider_id = provider_id
@@ -97,6 +112,7 @@ class RedisConversationMemoryProvider:
         self._max_messages = max_messages_per_conversation
         self._client = client
         self._owns_client = client is None
+        self._credential_provider = credential_provider
 
     @property
     def provider_id(self) -> str:
@@ -125,7 +141,18 @@ class RedisConversationMemoryProvider:
                 # A read that hangs holds a chat turn open for as long as the
                 # server cares to take.
                 retry_on_timeout=True,
+                # Also what makes Entra tokens rotate: an expired token closes
+                # the connection, and the next health check reconnects, which
+                # asks the credential provider for a fresh one.
                 health_check_interval=30,
+                # `None` is the default, so the un-authenticated local case is
+                # unaffected. The cast states the structural claim explicitly:
+                # redis-py only ever calls `get_credentials_async`, and this
+                # provider deliberately inherits nothing (ADR-0004).
+                credential_provider=cast(
+                    "CredentialProvider | None",
+                    self._credential_provider,
+                ),
             )
 
         _logger.info(
@@ -133,6 +160,7 @@ class RedisConversationMemoryProvider:
             provider_id=self._provider_id,
             ttl_seconds=self._ttl_seconds,
             max_messages=self._max_messages,
+            auth="entra" if self._credential_provider is not None else "url",
             # No URL: it may carry a password.
             detail="Redis conversation memory. Durable and shared across replicas.",
         )

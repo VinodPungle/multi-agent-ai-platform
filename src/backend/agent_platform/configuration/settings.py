@@ -277,6 +277,26 @@ class MemorySettings(BaseModel):
             "access key. Required when `provider` is `redis`."
         ),
     )
+    redis_auth_mode: Literal["url", "entra"] = Field(
+        default="url",
+        description=(
+            "How the platform authenticates to Redis. `url` takes credentials "
+            "from the URL, which is the local and Compose case where there are "
+            "none. `entra` authenticates with a Managed Identity token and no "
+            "secret at all, which is what a deployed environment uses — see "
+            "ADR-0012."
+        ),
+    )
+    redis_principal_id: str = Field(
+        default="",
+        description=(
+            "Object id of the identity Redis will see as the username under "
+            "Entra authentication. Must be the object id of the principal, not "
+            "the client id of the application: the two are easy to confuse and "
+            "the failure is an opaque WRONGPASS. Required when "
+            "`redis_auth_mode` is `entra`."
+        ),
+    )
     redis_ttl_seconds: int = Field(
         default=86_400,
         gt=0,
@@ -310,9 +330,24 @@ class MemorySettings(BaseModel):
         every conversation silently — which looks exactly like the in-memory
         provider working normally.
         """
-        if self.provider == "redis" and not self.redis_url.get_secret_value().strip():
+        if self.provider != "redis":
+            return self
+
+        if not self.redis_url.get_secret_value().strip():
             message = "Memory provider is 'redis' but memory.redis_url is not set."
             raise ValueError(message)
+
+        if self.redis_auth_mode == "entra" and not self.redis_principal_id.strip():
+            # Caught here rather than at connect time. The alternative is a
+            # deployment that provisions cleanly, starts cleanly, and fails
+            # every Redis command with WRONGPASS — a message that says nothing
+            # about the missing setting that caused it.
+            message = (
+                "memory.redis_auth_mode is 'entra' but memory.redis_principal_id is not "
+                "set. Redis uses the identity's object id as the username."
+            )
+            raise ValueError(message)
+
         return self
 
 
