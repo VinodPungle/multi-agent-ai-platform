@@ -1307,18 +1307,97 @@ overall: healthy
 
 A live research request returned a cited, current answer using four searches.
 
-### Azure ⛔ blocked
+### Azure ✅ deployed, one manual step outstanding
 
-`azd` 1.30 was installed and the `dev` environment configured, pointed at the
-**existing** Foundry account rather than provisioning a second one —
-`PROVISION_AI_FOUNDRY=false` — which avoids duplicating a billable model
-deployment and sidesteps the marketplace-agreement risk noted in Milestone 06.
+`azd provision` ran in **3 minutes 59 seconds**, then both services deployed.
 
-`azd provision` was **not run**: it creates billable resources and requires
-explicit approval, which an automated session cannot give itself.
+```
+rg-maap-dev
+├── id-maap-fn5j6tm3kbgem              managed identity
+├── log-maap-fn5j6tm3kbgem             Log Analytics
+├── appi-maap-fn5j6tm3kbgem            Application Insights
+├── kv-maap-fn5j6tm3kbgem              Key Vault
+├── crmaapfn5j6tm3kbgem                Container Registry
+├── cae-maap-fn5j6tm3kbgem             Container Apps environment
+├── ca-maap-backend-fn5j6tm3kbgem      backend
+└── ca-maap-frontend-fn5j6tm3kbgem     frontend
+```
 
-**One step will be needed after provisioning that the template cannot do.**
-Bicep can only grant roles on resources it creates, and this environment reuses
-a Foundry account it does not own. The managed identity must be granted
-`Cognitive Services User` on it, or every chat request fails with a 401 that
-does not mention roles.
+Frontend: <https://ca-maap-frontend-fn5j6tm3kbgem.yellowsky-26c3bab1.centralus.azurecontainerapps.io>
+Backend: <https://ca-maap-backend-fn5j6tm3kbgem.yellowsky-26c3bab1.centralus.azurecontainerapps.io>
+
+The environment reuses the existing Foundry account (`PROVISION_AI_FOUNDRY=false`)
+rather than provisioning a second billable model deployment.
+
+**Deployed health:**
+
+```
+/ready 200,  overall healthy
+  file-prompts    healthy   2 prompt asset(s) across 2 prompt(s)
+  tavily          healthy   Tavily search API
+  azure-foundry   healthy   Configured for deployment 'FW-Kimi-K3'
+  session-memory  healthy
+```
+
+### What the deployment proved
+
+Three things that had been asserted for milestones and were now actually true:
+
+1. **The Key Vault secret path works.** Tavily reports healthy in Azure, which
+   means the `@secure()` Bicep parameter reached the vault and the Container App
+   resolved it through the managed identity at revision start. None of that had
+   ever executed.
+2. **`prompts/` reaches the image.** Two assets, both agents. The Milestone 05
+   fix that added `COPY prompts` was verified locally; this is the first time it
+   has been verified in a built-and-pushed image.
+3. **The frontend build argument works.** The deployed bundle contains the real
+   backend URL. Built any other way it would have contained
+   `http://localhost:8000` and every browser request would have gone to the
+   user's own machine — the defect found while writing Milestone 06.
+
+### What it surfaced
+
+| Issue | Cause | Resolution |
+| --- | --- | --- |
+| `azd provision` failed in a background shell — "locking .env: context canceled" | azd holds its own auth session and locks the environment file; a detached shell cancelled it | Ran in the foreground. Not a template defect |
+| A combined `azd deploy` left the frontend on the placeholder image | The first backend build exceeded the command timeout and was killed mid-run, after the frontend image had been pushed but before its revision was updated | `azd deploy backend` and `azd deploy frontend` separately, 51 s and 33 s |
+| Two `/live` and `/healthz` probes returned nothing before returning 200 | Scale-to-zero. `minReplicas: 0` in development, so the first request wakes the revision | Working as designed |
+
+Nothing required a change to the templates, which is the first time in this
+project that a first live run of anything has not.
+
+### Outstanding: one role assignment
+
+Chat returns:
+
+```
+Azure authentication failed. ... In Azure, confirm the Managed Identity has the
+'Cognitive Services User' role on the Foundry resource.
+```
+
+That message is the provider's own error guidance from Milestone 05, and it is
+exactly right. Bicep can only grant roles on resources it creates, and this
+environment deliberately reuses a Foundry account it does not own.
+
+```bash
+PRINCIPAL=$(az identity show -n id-maap-fn5j6tm3kbgem -g rg-maap-dev --query principalId -o tsv)
+
+az role assignment create \
+  --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \
+  --role "Cognitive Services User" \
+  --scope "/subscriptions/8fb7cbfd-6273-4b2a-986c-0c4a4952aecc/resourceGroups/rg-multi-agent-ai-platform/providers/Microsoft.CognitiveServices/accounts/multi-agent-ai-platform-resource"
+```
+
+Until it is granted, health is green and chat returns a provider error — which is
+the correct behaviour: the health probe reports configuration, and the
+configuration *is* correct. Connectivity is proven by the first request, and
+that is the request proving it.
+
+### Cost note
+
+Development scales to zero, so the Container Apps idle cost is nil. Log
+Analytics bills per GB ingested. The model deployment is the pre-existing one,
+so nothing new is billed for inference capacity.
+
+To remove everything: `azd down --purge` — `--purge` matters, or Key Vault's
+soft delete holds the name for 7 days.
