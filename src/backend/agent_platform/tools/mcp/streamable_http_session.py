@@ -36,7 +36,7 @@ Authentication is deliberately absent
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -50,6 +50,15 @@ from agent_platform.tools.mcp.session import MCPToolDefinition, MCPToolOutcome
 __all__ = ["StreamableHTTPMCPSession"]
 
 _logger = get_logger(__name__)
+
+#: Attempts for `list_tools`, the one idempotent operation here.
+#:
+#: Three, because the failure being absorbed is a dropped connection and a
+#: server that drops two in a row is not having a blip.
+_LIST_TOOLS_ATTEMPTS = 3
+
+#: Base pause between attempts, multiplied by the attempt number.
+_RETRY_DELAY_SECONDS = 0.25
 
 
 class StreamableHTTPMCPSession:
@@ -90,8 +99,24 @@ class StreamableHTTPMCPSession:
         return self._server_id
 
     async def list_tools(self) -> tuple[MCPToolDefinition, ...]:
-        """Return every tool the server advertises."""
-        listed = await self._guarded("list_tools", self._list_tools())
+        """Return every tool the server advertises.
+
+        Retried on transport failure, and **only this operation is**. Listing
+        tools is an idempotent read, so a second attempt cannot do anything
+        twice — whereas ``call_tool`` may have side effects the platform cannot
+        see, and the protocol carries no idempotency signal
+        (``CLAUDE.md``: never retry non-idempotent operations automatically).
+
+        Worth the few lines because of when it runs. Discovery happens once, at
+        startup: a single dropped connection there means the platform serves its
+        entire lifetime without that server's tools. Health checks call it too,
+        and one blip should not report a working server as degraded.
+
+        The failure being absorbed is real and was observed — an SSE stream
+        ending without a response, which is what a server closing a connection
+        mid-request looks like from here.
+        """
+        listed = await self._guarded_with_retry("list_tools", self._list_tools)
 
         return tuple(
             MCPToolDefinition(
@@ -123,6 +148,43 @@ class StreamableHTTPMCPSession:
         )
 
     # -- Internals ---------------------------------------------------------
+
+    async def _guarded_with_retry(
+        self,
+        operation: str,
+        work: Callable[[], Coroutine[Any, Any, Any]],
+        attempts: int = _LIST_TOOLS_ATTEMPTS,
+    ) -> Any:  # noqa: ANN401 - SDK type, not leaked
+        """Run an **idempotent** operation, retrying transport failures.
+
+        Takes a factory rather than a coroutine: a coroutine can only be awaited
+        once, so a retry needs a fresh one. Passing the coroutine itself would
+        fail on the second attempt with a confusing "cannot reuse already
+        awaited coroutine" rather than the error that actually caused the retry.
+        """
+        last: ProviderError | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._guarded(operation, work())
+            except ProviderError as error:
+                last = error
+                if attempt < attempts:
+                    _logger.info(
+                        "mcp.retrying",
+                        server_id=self._server_id,
+                        operation=operation,
+                        attempt=attempt,
+                        detail="Idempotent read failed; retrying.",
+                    )
+                    # A short fixed pause. Long enough for a server that dropped
+                    # one connection to accept the next, short enough not to
+                    # stretch startup when a server is genuinely gone.
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS * attempt)
+
+        # `attempts` is at least 1, so the loop has always set this.
+        assert last is not None  # noqa: S101 - narrowing for the type checker
+        raise last
 
     async def _list_tools(self) -> Any:  # noqa: ANN401 - SDK type, not leaked
         async with self._session() as session:

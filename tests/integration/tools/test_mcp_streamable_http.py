@@ -217,6 +217,62 @@ class TestUnreachableServer:
         assert "hunter2" not in str(raised.value)
 
 
+class TestIdempotentRetry:
+    """Only `list_tools` is retried, and the asymmetry is the point."""
+
+    async def test_listing_tools_survives_a_transient_failure(
+        self,
+        mcp_server_url: str,
+    ) -> None:
+        """Discovery runs once at startup; a blip there costs the whole lifetime.
+
+        Driven by pointing the first attempt at nothing. A flaky server is hard
+        to simulate honestly, so this asserts the retry happens at all — the
+        real dropped-connection case is what motivated it, observed as an SSE
+        stream ending without a response.
+        """
+        session = StreamableHTTPMCPSession(server_id="weather", url=mcp_server_url)
+        attempts = 0
+        working = session._list_tools  # noqa: SLF001 - exercising the retry seam
+
+        async def fail_once_then_work() -> object:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                message = "transient"
+                raise ProviderError(message, provider_id="mcp:weather")
+            return await working()
+
+        listed = await session._guarded_with_retry(  # noqa: SLF001
+            "list_tools",
+            fail_once_then_work,
+        )
+
+        assert attempts == 2
+        assert {tool.name for tool in listed.tools} == {"forecast", "explode"}
+
+    async def test_calling_a_tool_is_not_retried(
+        self,
+        mcp_server_url: str,
+    ) -> None:
+        """A remote tool may have side effects, and the protocol says nothing about them."""
+        session = StreamableHTTPMCPSession(server_id="weather", url=mcp_server_url)
+        calls = 0
+
+        original = session._call_tool  # noqa: SLF001
+
+        async def counting(name: str, arguments: dict[str, object]) -> object:
+            nonlocal calls
+            calls += 1
+            return await original(name, arguments)
+
+        session._call_tool = counting  # type: ignore[method-assign]  # noqa: SLF001
+
+        await session.call_tool("forecast", {"city": "Oslo"})
+
+        assert calls == 1
+
+
 class TestCancellation:
     """The other half of the unreachable-server fix, and the riskier half.
 
