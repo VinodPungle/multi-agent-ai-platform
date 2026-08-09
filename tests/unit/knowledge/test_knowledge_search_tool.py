@@ -24,6 +24,7 @@ from agent_platform.tools.knowledge_search_tool import (
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.knowledge import KnowledgeDocument
 from agent_platform_sdk.dto.tool import ToolInvocation
+from agent_platform_sdk.interfaces.embedding_provider import EmbeddingProvider
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
 
 pytestmark = pytest.mark.unit
@@ -88,6 +89,10 @@ def a_document(document_id: str, content: str) -> KnowledgeDocument:
 class TestContractConformance:
     async def test_it_is_an_ordinary_tool_provider(self) -> None:
         assert isinstance(await a_tool(), ToolProvider)
+
+    def test_the_broken_double_satisfies_the_embedding_contract(self) -> None:
+        """Guards the double: a narrower stand-in only ever tests the stand-in."""
+        assert isinstance(BrokenEmbeddings(), EmbeddingProvider)
 
 
 class TestDescriptor:
@@ -191,7 +196,7 @@ class TestExecution:
         """Distinct from finding nothing: the agent should be able to say so."""
         tool = KnowledgeSearchTool(
             retriever=KnowledgeRetriever(
-                embeddings=BrokenEmbeddings(),  # type: ignore[arg-type]
+                embeddings=BrokenEmbeddings(),
                 vectors=InMemoryVectorStore(),
             )
         )
