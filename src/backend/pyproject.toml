@@ -40,6 +40,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.50b0",
     "azure-ai-inference>=1.0.0b9",
     "azure-identity>=1.19.0",
+    "redis>=5.2.0",
 ]
 
 [project.scripts]
@@ -55,3 +56,8 @@ packages = ["agent_platform"]
 [tool.uv.sources]
 agent-platform-sdk = { workspace = true }
 agent-platform-shared = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "fakeredis>=2.26.0",
+]

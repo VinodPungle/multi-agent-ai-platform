@@ -259,9 +259,33 @@ class MemorySettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: Literal["in-memory"] = Field(
+    provider: Literal["in-memory", "redis"] = Field(
         default="in-memory",
-        description="Memory backend. Redis, PostgreSQL and Cosmos DB join this list later.",
+        description=(
+            "Memory backend. `in-memory` is per-process: history is lost on "
+            "restart and is not shared between replicas, which is correct for a "
+            "laptop and wrong for anything scaled out. `redis` is durable and "
+            "shared. PostgreSQL and Cosmos DB join this list later."
+        ),
+    )
+    redis_url: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Redis connection URL, e.g. redis://localhost:6379 or "
+            "rediss://host:6380?password=... . A `SecretStr` because the URL "
+            "carries the password when a deployment authenticates with an "
+            "access key. Required when `provider` is `redis`."
+        ),
+    )
+    redis_ttl_seconds: int = Field(
+        default=86_400,
+        gt=0,
+        description=(
+            "How long a conversation survives without a write, refreshed on "
+            "every write. A day: long enough that a user returning after lunch "
+            "keeps their thread, short enough that abandoned conversations do "
+            "not accumulate forever."
+        ),
     )
     max_conversations: int = Field(
         default=500,
@@ -277,6 +301,19 @@ class MemorySettings(BaseModel):
         gt=0,
         description="Messages kept per conversation. Oldest are dropped first.",
     )
+
+    @model_validator(mode="after")
+    def _require_a_url_for_redis(self) -> Self:
+        """Fail at startup when Redis is selected but unconfigured.
+
+        The alternative is a platform that starts, reports healthy, and loses
+        every conversation silently — which looks exactly like the in-memory
+        provider working normally.
+        """
+        if self.provider == "redis" and not self.redis_url.get_secret_value().strip():
+            message = "Memory provider is 'redis' but memory.redis_url is not set."
+            raise ValueError(message)
+        return self
 
 
 class MockProviderSettings(BaseModel):

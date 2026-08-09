@@ -18,6 +18,7 @@ from agent_platform.configuration.settings import (
 )
 from agent_platform.dependencies.container import ApplicationContainer, build_llm_providers
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
+from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform.runtime.agent_runtime import AgentRuntime
 from agent_platform_sdk.interfaces.llm_gateway import LLMGateway
@@ -145,6 +146,10 @@ class TestChatWiring:
     ) -> None:
         memory = container.memory_provider()
 
+        # The concrete type first: it narrows for the assertions below, and it
+        # states which backend the default configuration selects — which is the
+        # thing worth pinning now that there is more than one.
+        assert isinstance(memory, InMemorySessionMemoryProvider)
         assert memory._max_conversations == test_settings.memory.max_conversations  # noqa: SLF001
         assert (
             memory._max_messages  # noqa: SLF001

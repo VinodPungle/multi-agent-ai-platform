@@ -21,6 +21,31 @@
 name: multi-agent-ai-platform
 
 services:
+  # ---------------------------------------------------------------------------
+  # Durable conversation memory.
+  #
+  # Optional: the platform defaults to in-process memory and starts without
+  # this. Set PLATFORM_MEMORY__PROVIDER=redis to use it, and get the behaviour
+  # a deployed environment actually has — history that survives a restart and
+  # is shared between replicas.
+  #
+  # Testing against the real thing locally matters here more than usual: the
+  # in-process provider cannot reproduce a lost conversation, so a bug that only
+  # appears with a shared store is invisible until production.
+  redis:
+    image: redis:7-alpine
+    # Persistence off. This is a development cache for conversations that are
+    # themselves ephemeral; an AOF file would only be state to clean up.
+    command: redis-server --save "" --appendonly no
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   backend:
     build:
       context: .

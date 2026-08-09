@@ -24,6 +24,7 @@ from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.events.publisher import LoggingEventPublisher
 from agent_platform.gateway.llm_gateway import DefaultLLMGateway
 from agent_platform.gateway.provider_resolver import ConfiguredProviderResolver
+from agent_platform.memory.redis_memory import RedisConversationMemoryProvider
 from agent_platform.memory.session_memory import InMemorySessionMemoryProvider
 from agent_platform.prompts.file_prompt_provider import (
     FilePromptProvider,
@@ -66,6 +67,7 @@ __all__ = [
     "build_agent_registry",
     "build_health_probes",
     "build_llm_providers",
+    "build_memory_provider",
     "build_model_registry",
     "build_provider_registry",
     "build_search_provider",
@@ -139,6 +141,28 @@ def build_model_registry() -> ModelRegistry:
     surface as a provider error on a user's first request.
     """
     return KeyedRegistry("model")
+
+
+def build_memory_provider(settings: PlatformSettings) -> MemoryProvider:
+    """Return the configured conversation store.
+
+    Both satisfy one interface, so no agent and no runtime code can tell which
+    it has — which is why durable memory was a new module and this branch rather
+    than a change to anything that reads a conversation.
+    """
+    if settings.memory.provider == "redis":
+        return RedisConversationMemoryProvider(
+            # Unwrapped at the single point of use; it travels as a `SecretStr`
+            # everywhere else so it cannot be logged by accident.
+            url=settings.memory.redis_url.get_secret_value(),
+            ttl_seconds=settings.memory.redis_ttl_seconds,
+            max_messages_per_conversation=settings.memory.max_messages_per_conversation,
+        )
+
+    return InMemorySessionMemoryProvider(
+        max_conversations=settings.memory.max_conversations,
+        max_messages_per_conversation=settings.memory.max_messages_per_conversation,
+    )
 
 
 def build_search_provider(settings: PlatformSettings) -> SearchProvider:
@@ -330,11 +354,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     #: Conversation state. The interface is what every consumer depends on;
     #: replacing this with Redis is a change to this line alone.
-    memory_provider = providers.Singleton(
-        InMemorySessionMemoryProvider,
-        max_conversations=settings.provided.memory.max_conversations,
-        max_messages_per_conversation=settings.provided.memory.max_messages_per_conversation,
-    )
+    memory_provider = providers.Singleton(build_memory_provider, settings)
 
     #: Versioned prompt assets, loaded from disk once during startup.
     prompt_provider = providers.Singleton(
