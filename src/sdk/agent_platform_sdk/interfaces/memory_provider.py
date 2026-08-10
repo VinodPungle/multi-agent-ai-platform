@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_sdk.dto.conversation import ConversationSummary
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.interfaces.provider import Provider
 
@@ -72,6 +73,25 @@ class MemoryProvider(Provider, Protocol):
 
         Providers that declare no semantic search may fall back to a documented
         strategy such as recency. Callers must not assume ranking semantics.
+        """
+        ...
+
+    async def list_conversations(
+        self,
+        context: ExecutionContext,
+        limit: int = 50,
+    ) -> tuple[ConversationSummary, ...]:
+        """Return recently active conversations, most recent first.
+
+        Summaries rather than transcripts: a sidebar showing twenty
+        conversations should not transfer twenty full histories.
+
+        Ordering is best-effort. A store that does not track recency may return
+        any stable order, and a caller must not treat position as a timestamp.
+
+        Implementations that cannot enumerate — a store keyed by a tenant this
+        provider has no view of — return an empty tuple rather than raising, so
+        history is a feature that degrades rather than an error.
         """
         ...
 

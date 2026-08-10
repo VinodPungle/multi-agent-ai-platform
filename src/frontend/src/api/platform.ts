@@ -9,12 +9,14 @@ import { request, type RequestOptions } from '@/api/client';
 import { conversationSchema, type Conversation } from '@/api/chat';
 import {
   agentListSchema,
+  conversationListSchema,
   costSummaryResponseSchema,
   modelListSchema,
   toolListSchema,
   healthResponseSchema,
   platformInfoSchema,
   type AgentSummary,
+  type ConversationSummary,
   type CostSummaryResponse,
   type ModelSummary,
   type ToolSummary,
@@ -32,6 +34,7 @@ export const platformQueryKeys = {
   agents: () => [...platformQueryKeys.all, 'agents'] as const,
   tools: () => [...platformQueryKeys.all, 'tools'] as const,
   models: () => [...platformQueryKeys.all, 'models'] as const,
+  conversations: () => [...platformQueryKeys.all, 'conversations'] as const,
 };
 
 export const chatQueryKeys = {
@@ -102,4 +105,14 @@ export function fetchTools(options?: RequestOptions): Promise<ToolSummary[]> {
 /** Fetch the model catalogue, with the prices cost estimates come from. */
 export function fetchModels(options?: RequestOptions): Promise<ModelSummary[]> {
   return request('/api/v1/models', modelListSchema, options);
+}
+
+/** Fetch recent conversations for the history list. */
+export function fetchConversations(
+  limit = 50,
+  options?: RequestOptions,
+): Promise<ConversationSummary[]> {
+  return request(`/api/v1/chat/conversations?limit=${limit}`, conversationListSchema, options).then(
+    (body) => body.conversations,
+  );
 }

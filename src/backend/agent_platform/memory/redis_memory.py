@@ -43,9 +43,11 @@ from typing import TYPE_CHECKING, cast
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from agent_platform.memory.session_memory import preview_of
 from agent_platform.telemetry.logging import get_logger
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
+from agent_platform_sdk.dto.conversation import ConversationSummary
 from agent_platform_sdk.dto.message import Message
 from agent_platform_sdk.types.enums import Capability, HealthStatus
 
@@ -323,6 +325,52 @@ class RedisConversationMemoryProvider:
         messages = await self.load(conversation_id, context)
         return messages[-limit:] if limit > 0 else ()
 
+    async def list_conversations(
+        self,
+        context: ExecutionContext,
+        limit: int = 50,
+    ) -> tuple[ConversationSummary, ...]:
+        """Return conversations this provider holds.
+
+        **Not ordered by recency**, and the contract permits that. Redis keys
+        have no creation time, and `SCAN` returns them in whatever order the
+        keyspace happens to yield — so ordering would need a sorted set
+        maintained on every write, which is a second thing to keep correct for
+        a sidebar. When history ordering matters more than it does today, that
+        index is the change; until then this is honest about what it gives.
+
+        Bounded by `limit` while scanning rather than after, because a shared
+        instance may hold far more conversations than a list wants and reading
+        every one of them to show twenty is the kind of query that is fine
+        until it is not.
+        """
+        client = self._client
+        if client is None:
+            return ()
+
+        summaries: list[ConversationSummary] = []
+
+        try:
+            async for key in client.scan_iter(match=f"{_KEY_PREFIX}*", count=100):
+                if len(summaries) >= limit:
+                    break
+                conversation_id = _conversation_id_of(key)
+                messages = await self.load(conversation_id, context)
+                if not messages:
+                    continue
+                summaries.append(
+                    ConversationSummary(
+                        conversation_id=conversation_id,
+                        message_count=len(messages),
+                        preview=preview_of(messages),
+                    )
+                )
+        except (RedisError, OSError) as error:
+            self._log_degraded("list_conversations", error, context)
+            return ()
+
+        return tuple(summaries)
+
     async def clear(self, context: ExecutionContext) -> None:
         """Remove every conversation this provider owns.
 
@@ -398,3 +446,9 @@ class RedisConversationMemoryProvider:
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
         return f"RedisConversationMemoryProvider(ttl={self._ttl_seconds}s)"
+
+
+def _conversation_id_of(key: str | bytes) -> str:
+    """Strip the namespace prefix from a stored key."""
+    text = key.decode("utf-8") if isinstance(key, bytes) else key
+    return text.removeprefix(_KEY_PREFIX)

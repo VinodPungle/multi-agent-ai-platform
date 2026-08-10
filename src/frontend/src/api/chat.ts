@@ -169,6 +169,11 @@ function parseFrame(frame: string): { event: string; data: string } | null {
 export interface StreamChatOptions {
   message: string;
   conversationId?: string;
+  /** Pin the model for this turn. Omit to let routing policy choose. */
+  modelId?: string;
+  /** Sampling temperature. `0` is a valid, meaningful value — not "unset". */
+  temperature?: number;
+  maxOutputTokens?: number;
   signal?: AbortSignal;
 }
 
@@ -231,6 +236,14 @@ export async function* streamChat(
     body: JSON.stringify({
       message: options.message,
       ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
+      // Each is sent only when set, so the backend keeps the agent's own value.
+      // `!== undefined` rather than a truthiness check: a temperature of 0 is a
+      // deliberate request for determinism and must not be dropped.
+      ...(options.modelId ? { model_id: options.modelId } : {}),
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options.maxOutputTokens !== undefined
+        ? { max_output_tokens: options.maxOutputTokens }
+        : {}),
     }),
     signal: options.signal,
   });

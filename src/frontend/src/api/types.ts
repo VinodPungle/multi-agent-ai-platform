@@ -174,3 +174,16 @@ export const modelListSchema = z.array(modelSummarySchema);
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 export type ToolSummary = z.infer<typeof toolSummarySchema>;
 export type ModelSummary = z.infer<typeof modelSummarySchema>;
+
+/** A past conversation, as a history list needs it. */
+export const conversationSummarySchema = z.object({
+  conversation_id: z.string(),
+  message_count: z.number().int().nonnegative(),
+  preview: z.string(),
+});
+
+export const conversationListSchema = z.object({
+  conversations: z.array(conversationSummarySchema),
+});
+
+export type ConversationSummary = z.infer<typeof conversationSummarySchema>;

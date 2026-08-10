@@ -152,6 +152,8 @@ class AgentRuntime:
         conversation_id: str | None = None,
         pinned_model_id: str | None = None,
         objective: RoutingObjective = RoutingObjective.BALANCED,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> RuntimeTurn:
         """Validate, assemble context and enforce policy for one turn.
 
@@ -170,6 +172,13 @@ class AgentRuntime:
                 authorisation layer yet to decide who may. Workflows and
                 operator tooling can use it; anonymous callers cannot.
             objective: What routing should optimise for among viable models.
+            temperature: Overrides the agent's configured sampling temperature
+                for this turn. ``None`` keeps the agent's own value — which is
+                the distinction that matters, because zero is a meaningful
+                temperature and must not be read as "unset".
+            max_output_tokens: Overrides the agent's configured output cap.
+                Still bounded by the budget policy, which the runtime enforces
+                afterwards regardless of what a caller asked for.
 
         Raises:
             NotFoundError: no such agent, or no model can serve the turn.
@@ -218,8 +227,13 @@ class AgentRuntime:
             prompt=prompt,
             variables={"locale": execution_context.locale},
             model_id=decision.model_id,
-            temperature=descriptor.temperature,
-            max_output_tokens=descriptor.max_output_tokens,
+            # `is not None` rather than `or`: a temperature of 0.0 is a
+            # deliberate request for determinism, and `or` would silently
+            # discard it for the agent's default.
+            temperature=(temperature if temperature is not None else descriptor.temperature),
+            max_output_tokens=(
+                max_output_tokens if max_output_tokens is not None else descriptor.max_output_tokens
+            ),
         )
 
         return RuntimeTurn(agent, request, execution_context, conversation_id, decision)

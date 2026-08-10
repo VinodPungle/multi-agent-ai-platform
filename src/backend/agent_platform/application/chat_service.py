@@ -27,6 +27,7 @@ from agent_platform.domain.chat import (
     ChatCompletedEvent,
     ChatDeltaEvent,
     ChatErrorEvent,
+    ChatOptions,
     ChatStartedEvent,
     ChatStreamEvent,
     ChatToolEvent,
@@ -39,6 +40,7 @@ from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.dto.completion import TokenUsage
+from agent_platform_sdk.dto.conversation import ConversationSummary
 from agent_platform_sdk.dto.message import Message, ToolCall
 from agent_platform_sdk.interfaces.memory_provider import MemoryProvider
 from agent_platform_sdk.types.enums import MessageRole
@@ -104,6 +106,7 @@ class ChatService:
         conversation_id: str,
         prompt: str,
         context: ExecutionContext,
+        options: ChatOptions | None = None,
     ) -> ChatTurn:
         """Run one turn and return the complete answer.
 
@@ -118,7 +121,7 @@ class ChatService:
         with _tracer.start_as_current_span("chat.send") as span:
             span.set_attribute("chat.streaming", False)
 
-            turn = await self._runtime.prepare(self._agent_id, cleaned, context, conversation_id)
+            turn = await self._prepare(cleaned, context, conversation_id, options)
             result = await self._runtime.execute(turn)
 
             _logger.info(
@@ -146,6 +149,7 @@ class ChatService:
         conversation_id: str,
         prompt: str,
         context: ExecutionContext,
+        options: ChatOptions | None = None,
     ) -> AsyncGenerator[ChatStreamEvent, None]:
         """Validate and prepare the turn, then return the events it will emit.
 
@@ -166,7 +170,7 @@ class ChatService:
             PolicyViolationError: the agent is disabled.
         """
         cleaned = self._validate_prompt(prompt)
-        turn = await self._runtime.prepare(self._agent_id, cleaned, context, conversation_id)
+        turn = await self._prepare(cleaned, context, conversation_id, options)
         return self._emit(turn, conversation_id)
 
     async def regenerate(
@@ -268,6 +272,43 @@ class ChatService:
             usage=usage,
             finish_reason=finish_reason,
         )
+
+    async def _prepare(
+        self,
+        prompt: str,
+        context: ExecutionContext,
+        conversation_id: str,
+        options: ChatOptions | None,
+    ) -> RuntimeTurn:
+        """Prepare a turn, applying any per-request overrides.
+
+        One place, so `send` and `stream` cannot drift in how they honour a
+        caller's options — which is exactly the kind of difference nobody
+        notices until streaming ignores a setting that non-streaming respects.
+        """
+        chosen = options or ChatOptions()
+        return await self._runtime.prepare(
+            self._agent_id,
+            prompt,
+            context,
+            conversation_id,
+            pinned_model_id=chosen.model_id,
+            temperature=chosen.temperature,
+            max_output_tokens=chosen.max_output_tokens,
+        )
+
+    async def list_conversations(
+        self,
+        context: ExecutionContext,
+        limit: int = 50,
+    ) -> tuple[ConversationSummary, ...]:
+        """Return recent conversations for a history list.
+
+        Read straight from memory rather than kept in a second index: the
+        store already holds every conversation, and a parallel list would be
+        one more thing to keep correct when a conversation is deleted.
+        """
+        return await self._memory.list_conversations(context, limit=limit)
 
     def _validate_prompt(self, prompt: str) -> str:
         """Return the trimmed message, or reject it.

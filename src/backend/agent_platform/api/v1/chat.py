@@ -25,14 +25,21 @@ instead, which also gives it working cancellation.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_platform.api.sse import SSE_HEADERS, SSE_MEDIA_TYPE, sse_stream
 from agent_platform.dependencies.providers import ChatServiceDep, ExecutionContextDep
-from agent_platform.domain.chat import ChatStreamEvent, ChatTurn, ConversationHistory
+from agent_platform.domain.chat import (
+    ChatOptions,
+    ChatStreamEvent,
+    ChatTurn,
+    ConversationHistory,
+)
+from agent_platform_sdk.dto.conversation import ConversationSummary
 from agent_platform_shared import new_conversation_id
 
 __all__ = [
@@ -70,6 +77,42 @@ class ChatMessageRequest(BaseModel):
             "the identifier and returns it, so a client never has to invent one."
         ),
     )
+
+    # Per-request overrides. Exposed on the public API deliberately, and the
+    # trade is worth naming: choosing a model is choosing a bill, and there is
+    # no authorisation layer yet to decide who may. Each is therefore bounded —
+    # an unknown model is refused rather than substituted, and `max_output_tokens`
+    # has a ceiling — so the worst a caller can do is pick an expensive model
+    # from the catalogue an operator already chose to register.
+    model_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Pin the model for this turn, from those /api/v1/models lists. Omit "
+            "to let routing policy choose. A model that cannot serve the turn is "
+            "refused, never quietly replaced."
+        ),
+    )
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature. Zero means deterministic, not unset.",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=32_000,
+        description="Cap on generated tokens. Budget policy still applies on top.",
+    )
+
+    def to_options(self) -> ChatOptions:
+        """Return the generation overrides this request carries."""
+        return ChatOptions(
+            model_id=self.model_id,
+            temperature=self.temperature,
+            max_output_tokens=self.max_output_tokens,
+        )
 
 
 class MessageResponse(BaseModel):
@@ -176,6 +219,7 @@ async def send_message(
         conversation_id,
         request.message,
         context.derive(conversation_id=conversation_id),
+        options=request.to_options(),
     )
     return ChatTurnResponse.from_turn(turn)
 
@@ -207,7 +251,12 @@ async def stream_message(
 
     # Awaited here, not inside the response: validation must fail while a status
     # code is still available to carry the failure.
-    events = await service.stream(conversation_id, request.message, turn_context)
+    events = await service.stream(
+        conversation_id,
+        request.message,
+        turn_context,
+        options=request.to_options(),
+    )
     return _streaming_response(events)
 
 
@@ -277,3 +326,32 @@ async def clear_conversation(
 ) -> None:
     """Forget a conversation."""
     await service.clear(conversation_id, context.derive(conversation_id=conversation_id))
+
+
+class ConversationListResponse(BaseModel):
+    """Recent conversations, for a history list."""
+
+    model_config = ConfigDict(frozen=True)
+
+    conversations: tuple[ConversationSummary, ...]
+
+
+@router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="Recent conversations",
+    description=(
+        "Conversations this deployment still holds, most recent first where the memory "
+        "provider tracks recency. Summaries rather than transcripts: opening one fetches "
+        "its messages. In-process memory loses these on restart; Redis does not."
+    ),
+)
+async def list_conversations(
+    service: ChatServiceDep,
+    context: ExecutionContextDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ConversationListResponse:
+    """Return recent conversations."""
+    return ConversationListResponse(
+        conversations=await service.list_conversations(context, limit=limit),
+    )

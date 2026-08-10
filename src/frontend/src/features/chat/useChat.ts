@@ -16,7 +16,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import { ApiError } from '@/api/client';
-import { clearConversation } from '@/api/platform';
+import { clearConversation, fetchConversation } from '@/api/platform';
 import { regenerateChat, streamChat, type ChatStreamEvent } from '@/api/chat';
 
 export type MessageStatus = 'complete' | 'streaming' | 'stopped' | 'failed';
@@ -60,6 +60,14 @@ function localId(prefix: string): string {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Per-turn generation overrides, chosen in the composer. */
+export interface GenerationOptions {
+  modelId?: string;
+  /** `0` is meaningful, so this is optional rather than defaulted. */
+  temperature?: number;
+  maxOutputTokens?: number;
 }
 
 export function useChat() {
@@ -168,7 +176,7 @@ export function useChat() {
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, options: GenerationOptions = {}) => {
       const trimmed = text.trim();
       if (!trimmed || isStreaming) {
         return;
@@ -191,6 +199,9 @@ export function useChat() {
         streamChat({
           message: trimmed,
           conversationId: conversationId ?? undefined,
+          modelId: options.modelId,
+          temperature: options.temperature,
+          maxOutputTokens: options.maxOutputTokens,
           signal: controller.signal,
         }),
         assistantId,
@@ -266,7 +277,39 @@ export function useChat() {
     }
   }, [conversationId]);
 
+  /**
+   * Reopen a past conversation.
+   *
+   * Loads its transcript and adopts its id, so the next message continues it
+   * rather than starting a fresh one. Refuses mid-stream: switching the
+   * conversation underneath an in-flight response would attach the answer to
+   * the wrong thread.
+   */
+  const open = useCallback(
+    async (id: string) => {
+      if (isStreaming) {
+        return;
+      }
+      setError(null);
+      try {
+        const conversation = await fetchConversation(id);
+        setMessages(
+          conversation.messages.map((message, index) => ({
+            id: `${id}-${index}`,
+            role: message.role === 'user' ? 'user' : 'assistant',
+            content: message.content,
+            status: 'complete' as const,
+          })),
+        );
+        setConversationId(id);
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : 'Could not open that conversation.');
+      }
+    },
+    [isStreaming],
+  );
+
   const state: ChatState = { messages, conversationId, isStreaming, error };
 
-  return { ...state, send, stop, regenerate, clear };
+  return { ...state, send, stop, regenerate, clear, open };
 }

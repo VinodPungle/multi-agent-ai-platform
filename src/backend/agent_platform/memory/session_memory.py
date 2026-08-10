@@ -29,15 +29,17 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Sequence
 
 from agent_platform.telemetry.logging import get_logger
 from agent_platform.telemetry.tracing import get_tracer
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
 from agent_platform_sdk.contracts.health import ComponentHealth
+from agent_platform_sdk.dto.conversation import ConversationSummary
 from agent_platform_sdk.dto.message import Message
-from agent_platform_sdk.types.enums import Capability, HealthStatus
+from agent_platform_sdk.types.enums import Capability, HealthStatus, MessageRole
 
-__all__ = ["InMemorySessionMemoryProvider"]
+__all__ = ["InMemorySessionMemoryProvider", "preview_of"]
 
 _logger = get_logger(__name__)
 _tracer = get_tracer(__name__)
@@ -217,6 +219,31 @@ class InMemorySessionMemoryProvider:
             ]
         return tuple(matches[:limit])
 
+    async def list_conversations(
+        self,
+        context: ExecutionContext,
+        limit: int = 50,
+    ) -> tuple[ConversationSummary, ...]:
+        """Return recently active conversations, most recent first.
+
+        The `OrderedDict` already tracks recency for eviction, so reversing it
+        gives the ordering a history list wants for free — the most recently
+        used conversation is the one about to be evicted last, and the one a
+        user is most likely looking for.
+        """
+        del context
+        async with self._lock:
+            recent = list(self._conversations.items())[-limit:]
+
+        return tuple(
+            ConversationSummary(
+                conversation_id=conversation_id,
+                message_count=len(messages),
+                preview=preview_of(messages),
+            )
+            for conversation_id, messages in reversed(recent)
+        )
+
     async def clear(self, context: ExecutionContext) -> None:
         """Remove every conversation held by this provider.
 
@@ -256,3 +283,24 @@ class InMemorySessionMemoryProvider:
                 conversation_id=evicted_id,
                 detail="Least recently used conversation dropped; provider at capacity.",
             )
+
+
+#: Longest preview a history list needs. Enough to recognise a conversation,
+#: short enough that a sidebar entry stays one or two lines.
+_PREVIEW_CHARACTERS = 80
+
+
+def preview_of(messages: Sequence[Message]) -> str:
+    """Return the opening words of the first thing the user said.
+
+    The first user message rather than the most recent: a list is scanned to
+    find a conversation again, and people remember how one started rather than
+    where it got to.
+    """
+    for message in messages:
+        if message.role is MessageRole.USER and message.content.strip():
+            text = " ".join(message.content.split())
+            if len(text) <= _PREVIEW_CHARACTERS:
+                return text
+            return text[:_PREVIEW_CHARACTERS].rstrip() + "…"
+    return ""

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatPage } from '@/features/chat/ChatPage';
 import { requestBody, requestMethod, requestUrl } from '@/test/fetchAssertions';
-import { renderWithProviders } from '@/test/utils';
+import { jsonResponse, renderWithProviders } from '@/test/utils';
 
 /** Build an SSE body from a list of (event, payload) pairs. */
 function sseBody(events: readonly (readonly [string, unknown])[]): string {
@@ -58,8 +58,54 @@ const ANSWER_EVENTS = [
   ],
 ] as const;
 
+/**
+ * The page makes more than one request now.
+ *
+ * Besides the chat stream it loads the conversation history and the model
+ * catalogue, so a single `mockResolvedValue` no longer works: one `Response`
+ * body can only be read once, and whichever query got there first consumed it.
+ *
+ * Routing by URL also keeps the chat assertions honest — `chatCalls()` counts
+ * only what was sent to the chat endpoints, so "sent one message" stays a
+ * statement about messages rather than about HTTP traffic.
+ */
+function routeFetch(chatResponse: () => Response): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = requestUrlOf(input);
+      if (url.includes('/chat/conversations') && !url.includes('regenerate')) {
+        return Promise.resolve(jsonResponse({ conversations: [] }));
+      }
+      if (url.includes('/api/v1/models')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      return Promise.resolve(chatResponse());
+    }),
+  );
+}
+
+function requestUrlOf(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+/** Calls that actually went to a chat endpoint. */
+function chatCalls(): unknown[][] {
+  return vi.mocked(fetch).mock.calls.filter((call) => {
+    const url = requestUrlOf(call[0]);
+    // The history list lives under `/chat/conversations` too, and carries a
+    // query string — so matching the path alone counts a sidebar refresh as a
+    // sent message, which is how "sent one message" became "made five
+    // requests". Anything with `?` or ending there is the list, not a turn.
+    const isHistoryList = /\/chat\/conversations(\?|$)/.test(url);
+    return url.includes('/chat/') && !isHistoryList;
+  });
+}
+
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse(sseBody(ANSWER_EVENTS))));
+  routeFetch(() => streamResponse(sseBody(ANSWER_EVENTS)));
 });
 
 afterEach(() => {
@@ -101,7 +147,7 @@ describe('ChatPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(chatCalls()).toHaveLength(0);
   });
 
   it('does not send a whitespace-only message', async () => {
@@ -132,7 +178,7 @@ describe('ChatPage', () => {
     await user.type(input, 'first{Shift>}{Enter}{/Shift}second');
 
     expect(input).toHaveValue('first\nsecond');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(chatCalls()).toHaveLength(0);
   });
 
   it('clears the input after sending', async () => {
@@ -153,15 +199,17 @@ describe('ChatPage', () => {
     await send('second');
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(chatCalls()).toHaveLength(2);
     });
-    expect(requestBody(vi.mocked(fetch).mock.calls[1])).toMatchObject({ conversation_id: 'c1' });
+    expect(requestBody(chatCalls()[1] as Parameters<typeof requestBody>[0])).toMatchObject({
+      conversation_id: 'c1',
+    });
   });
 });
 
 describe('Markdown rendering', () => {
   it('renders Markdown structure as elements', async () => {
-    vi.mocked(fetch).mockResolvedValue(
+    routeFetch(() =>
       streamResponse(
         sseBody([
           ['delta', { type: 'delta', delta: '## Heading\n\n- one\n- two\n' }],
@@ -187,7 +235,7 @@ describe('Markdown rendering', () => {
 
   it('renders a fenced code block with its language', async () => {
     const content = '```python\nprint("hi")\n```';
-    vi.mocked(fetch).mockResolvedValue(
+    routeFetch(() =>
       streamResponse(
         sseBody([
           [
@@ -213,7 +261,7 @@ describe('Markdown rendering', () => {
   it('does not execute HTML embedded in a response', async () => {
     // A model repeats what it was shown. Raw HTML must render as text.
     const content = '<img src=x onerror="alert(1)">';
-    vi.mocked(fetch).mockResolvedValue(
+    routeFetch(() =>
       streamResponse(
         sseBody([
           [
@@ -263,11 +311,11 @@ describe('Turn actions', () => {
     await send('hello');
     await screen.findByText('Hello world');
 
-    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+    routeFetch(() => new Response(null, { status: 204 }));
     await userEvent.setup().click(screen.getByRole('button', { name: 'Clear' }));
 
     expect(screen.getByText('Start a conversation')).toBeInTheDocument();
-    const lastCall = vi.mocked(fetch).mock.calls.at(-1);
+    const lastCall = chatCalls().at(-1) as Parameters<typeof requestMethod>[0];
     expect(requestUrl(lastCall)).toContain('/conversations/c1');
     expect(requestMethod(lastCall)).toBe('DELETE');
   });
@@ -286,7 +334,7 @@ describe('Turn actions', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
 
     await waitFor(() => {
-      expect(requestUrl(vi.mocked(fetch).mock.calls.at(-1))).toContain(
+      expect(requestUrl(chatCalls().at(-1) as Parameters<typeof requestUrl>[0])).toContain(
         '/conversations/c1/regenerate',
       );
     });
@@ -295,13 +343,14 @@ describe('Turn actions', () => {
 
 describe('Error handling', () => {
   it('shows the backend message when a turn is rejected', async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { category: 'validation', message: 'A message cannot be empty.' },
-        }),
-        { status: 422, headers: { 'Content-Type': 'application/json' } },
-      ),
+    routeFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: { category: 'validation', message: 'A message cannot be empty.' },
+          }),
+          { status: 422, headers: { 'Content-Type': 'application/json' } },
+        ),
     );
     renderWithProviders(<ChatPage />);
 
@@ -313,7 +362,7 @@ describe('Error handling', () => {
   it('shows a mid-stream failure beside the partial answer', async () => {
     // A stream that has sent bytes reports failure in-band; the text already on
     // screen must survive.
-    vi.mocked(fetch).mockResolvedValue(
+    routeFetch(() =>
       streamResponse(
         sseBody([
           ['delta', { type: 'delta', delta: 'partial answer' }],
@@ -331,7 +380,7 @@ describe('Error handling', () => {
   });
 
   it('reports an unreachable backend', async () => {
-    vi.mocked(fetch).mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     renderWithProviders(<ChatPage />);
 
     await send('hello');
@@ -368,7 +417,7 @@ describe('Tool visibility', () => {
   ] as const;
 
   it('shows which tool the agent used, and what it asked', async () => {
-    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    routeFetch(() => streamResponse(sseBody(SEARCH_EVENTS)));
     renderWithProviders(<ChatPage />);
 
     await send('search for the eiffel tower');
@@ -378,7 +427,7 @@ describe('Tool visibility', () => {
   });
 
   it('keeps the trace visible after the answer arrives', async () => {
-    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    routeFetch(() => streamResponse(sseBody(SEARCH_EVENTS)));
     renderWithProviders(<ChatPage />);
 
     await send('search for the eiffel tower');
@@ -388,7 +437,7 @@ describe('Tool visibility', () => {
   });
 
   it('does not add the tool summary to the answer text', async () => {
-    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(SEARCH_EVENTS)));
+    routeFetch(() => streamResponse(sseBody(SEARCH_EVENTS)));
     renderWithProviders(<ChatPage />);
 
     await send('search for the eiffel tower');
@@ -398,7 +447,7 @@ describe('Tool visibility', () => {
   });
 
   it('shows no trace for a turn that used no tools', async () => {
-    vi.mocked(fetch).mockResolvedValue(streamResponse(sseBody(ANSWER_EVENTS)));
+    routeFetch(() => streamResponse(sseBody(ANSWER_EVENTS)));
     renderWithProviders(<ChatPage />);
 
     await send('hello');

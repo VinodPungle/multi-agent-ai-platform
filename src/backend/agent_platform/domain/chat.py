@@ -31,6 +31,7 @@ __all__ = [
     "ChatDeltaEvent",
     "ChatErrorEvent",
     "ChatEventType",
+    "ChatOptions",
     "ChatStartedEvent",
     "ChatStreamEvent",
     "ChatToolEvent",
@@ -201,3 +202,43 @@ class ConversationHistory(BaseModel):
     def is_empty(self) -> bool:
         """Whether the conversation holds no messages."""
         return not self.messages
+
+
+class ChatOptions(BaseModel):
+    """Per-request overrides for one turn.
+
+    Every field is optional and ``None`` means *keep the agent's own value*.
+    That distinction matters more than it looks: a temperature of ``0.0`` is a
+    deliberate request for determinism, so treating falsy as unset would
+    silently discard it.
+
+    These are a caller's *preferences*, not instructions the runtime is bound
+    by. Budget policy still applies afterwards, and a pinned model that cannot
+    serve the turn is refused rather than quietly replaced.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_id: str | None = Field(
+        default=None,
+        description=(
+            "Pin the model for this turn. Must be one the catalogue holds; an "
+            "unknown or unsuitable model is refused rather than substituted."
+        ),
+    )
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature. Zero is deterministic, not unset.",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=32_000,
+        description=(
+            "Cap on generated tokens. Bounded here as well as by budget "
+            "policy, because an unbounded value from an HTTP caller is a bill "
+            "anyone can write."
+        ),
+    )
