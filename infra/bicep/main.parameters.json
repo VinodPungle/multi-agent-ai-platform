@@ -40,18 +40,84 @@
     },
     "logLevel": {
       "value": "${PLATFORM_LOG_LEVEL=INFO}"
+    },
+    "logRetentionDays": {
+      "value": "${LOG_RETENTION_DAYS=30}"
+    },
+    "backendMinReplicas": {
+      "value": "${BACKEND_MIN_REPLICAS=0}"
+    },
+    "backendMaxReplicas": {
+      "value": "${BACKEND_MAX_REPLICAS=3}"
+    },
+    "frontendMinReplicas": {
+      "value": "${FRONTEND_MIN_REPLICAS=0}"
+    },
+    "frontendMaxReplicas": {
+      "value": "${FRONTEND_MAX_REPLICAS=3}"
+    },
+    "traceSampleRatio": {
+      "value": "${TRACE_SAMPLE_RATIO=1}"
+    },
+    "aiFoundryDeploymentSku": {
+      "value": "${AZURE_AI_FOUNDRY_DEPLOYMENT_SKU=DataZoneStandard}"
+    },
+    "aiFoundryDeploymentCapacity": {
+      "value": "${AZURE_AI_FOUNDRY_DEPLOYMENT_CAPACITY=25}"
+    },
+    "enableAlerts": {
+      "value": "${ENABLE_ALERTS=false}"
+    },
+    "alertNotificationEmail": {
+      "value": "${ALERT_NOTIFICATION_EMAIL=}"
+    },
+    "latencyThresholdMs": {
+      "value": "${LATENCY_THRESHOLD_MS=30000}"
+    },
+    "hourlyTokenThreshold": {
+      "value": "${HOURLY_TOKEN_THRESHOLD=500000}"
+    },
+    "provisionRedis": {
+      "value": "${PROVISION_REDIS=false}"
+    },
+    "redisSkuName": {
+      "value": "${REDIS_SKU_NAME=Standard}"
+    },
+    "redisSkuCapacity": {
+      "value": "${REDIS_SKU_CAPACITY=0}"
+    },
+    "redisTtlSeconds": {
+      "value": "${REDIS_TTL_SECONDS=86400}"
+    },
+    "routingObjective": {
+      "value": "${ROUTING_OBJECTIVE=balanced}"
+    },
+    "enableKnowledge": {
+      "value": "${ENABLE_KNOWLEDGE=false}"
+    },
+    "provisionEmbeddings": {
+      "value": "${PROVISION_EMBEDDINGS=false}"
+    },
+    "aiFoundryEmbeddingDeployment": {
+      "value": "${AI_FOUNDRY_EMBEDDING_DEPLOYMENT=}"
+    },
+    "embeddingModelName": {
+      "value": "${EMBEDDING_MODEL_NAME=text-embedding-3-small}"
+    },
+    "embeddingDimensions": {
+      "value": "${EMBEDDING_DIMENSIONS=1536}"
+    },
+    "knowledgeMinimumScore": {
+      "value": "${KNOWLEDGE_MINIMUM_SCORE=0.2}"
     }
   },
-
   "//tavilyApiKey": {
     "note": "Set with `azd env set TAVILY_API_KEY tvly-...`. azd stores it in .azure/<env>/.env, which is git-ignored. The Bicep parameter is @secure(), so it appears in no deployment log or output, and the template writes it to Key Vault rather than to a container's plain environment.",
     "warning": "Never put the value in this file. It is committed."
   },
-
   "//numericParameters": {
     "note": "logRetentionDays, replica counts, deployment capacity and traceSampleRatio are not bound here. azd substitutes environment variables as strings and ARM rejects a string for an int parameter. Numeric values belong in a per-environment .bicepparam file under infra/environments/, which is typed."
   },
-
   "//provisionAiFoundry": {
     "note": "azd substitutes booleans as strings too. Bicep's parameter coercion accepts 'true'/'false' for a bool, which numeric parameters do not get. Setting PROVISION_AI_FOUNDRY=false and AZURE_AI_FOUNDRY_ENDPOINT=https://... points an environment at an account it does not own."
   }
