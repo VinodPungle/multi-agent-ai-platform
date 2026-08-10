@@ -20,16 +20,21 @@ from agent_platform.application.health_service import HealthService
 from agent_platform.configuration.settings import PlatformSettings
 from agent_platform.dependencies.container import ApplicationContainer
 from agent_platform.evaluation.cost_analytics import InMemoryCostAnalytics
+from agent_platform.registries import AgentRegistry, KeyedRegistry, ModelRegistry
 from agent_platform_sdk.contracts.execution_context import ExecutionContext
+from agent_platform_sdk.interfaces.tool_provider import ToolProvider
 from agent_platform_shared import get_correlation_id, get_request_id
 
 __all__ = [
+    "AgentRegistryDep",
     "ChatServiceDep",
     "ContainerDep",
     "CostAnalyticsDep",
     "ExecutionContextDep",
     "HealthServiceDep",
+    "ModelRegistryDep",
     "SettingsDep",
+    "ToolRegistryDep",
     "get_chat_service",
     "get_container",
     "get_execution_context",
@@ -103,6 +108,33 @@ def get_cost_analytics(container: ContainerDep) -> InMemoryCostAnalytics:
 
 
 CostAnalyticsDep = Annotated[InMemoryCostAnalytics, Depends(get_cost_analytics)]
+
+
+def get_agent_registry(container: ContainerDep) -> AgentRegistry:
+    """Return the catalogue of registered agents."""
+    registry: AgentRegistry = container.agent_registry()
+    return registry
+
+
+AgentRegistryDep = Annotated[AgentRegistry, Depends(get_agent_registry)]
+
+
+def get_tool_registry(container: ContainerDep) -> KeyedRegistry[ToolProvider]:
+    """Return the catalogue of registered tools."""
+    registry: KeyedRegistry[ToolProvider] = container.tool_registry()
+    return registry
+
+
+ToolRegistryDep = Annotated[KeyedRegistry[ToolProvider], Depends(get_tool_registry)]
+
+
+def get_model_registry(container: ContainerDep) -> ModelRegistry:
+    """Return the model catalogue, populated at startup from each provider."""
+    registry: ModelRegistry = container.model_registry()
+    return registry
+
+
+ModelRegistryDep = Annotated[ModelRegistry, Depends(get_model_registry)]
 
 
 def get_execution_context(settings: SettingsDep) -> ExecutionContext:

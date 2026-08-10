@@ -8,10 +8,16 @@
 import { request, type RequestOptions } from '@/api/client';
 import { conversationSchema, type Conversation } from '@/api/chat';
 import {
+  agentListSchema,
   costSummaryResponseSchema,
+  modelListSchema,
+  toolListSchema,
   healthResponseSchema,
   platformInfoSchema,
+  type AgentSummary,
   type CostSummaryResponse,
+  type ModelSummary,
+  type ToolSummary,
   type HealthResponse,
   type PlatformInfo,
 } from '@/api/types';
@@ -23,6 +29,9 @@ export const platformQueryKeys = {
   health: () => [...platformQueryKeys.all, 'health'] as const,
   info: () => [...platformQueryKeys.all, 'info'] as const,
   costs: () => [...platformQueryKeys.all, 'costs'] as const,
+  agents: () => [...platformQueryKeys.all, 'agents'] as const,
+  tools: () => [...platformQueryKeys.all, 'tools'] as const,
+  models: () => [...platformQueryKeys.all, 'models'] as const,
 };
 
 export const chatQueryKeys = {
@@ -78,4 +87,19 @@ export function clearConversation(
 /** Fetch cost and usage totals for the replica that answers the request. */
 export function fetchCostSummary(options?: RequestOptions): Promise<CostSummaryResponse> {
   return request('/api/v1/analytics/costs', costSummaryResponseSchema, options);
+}
+
+/** Fetch the agents this deployment can run. */
+export function fetchAgents(options?: RequestOptions): Promise<AgentSummary[]> {
+  return request('/api/v1/agents', agentListSchema, options);
+}
+
+/** Fetch the tools the runtime can execute. */
+export function fetchTools(options?: RequestOptions): Promise<ToolSummary[]> {
+  return request('/api/v1/tools', toolListSchema, options);
+}
+
+/** Fetch the model catalogue, with the prices cost estimates come from. */
+export function fetchModels(options?: RequestOptions): Promise<ModelSummary[]> {
+  return request('/api/v1/models', modelListSchema, options);
 }

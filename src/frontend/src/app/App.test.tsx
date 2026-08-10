@@ -113,15 +113,20 @@ describe('App shell', () => {
     expect(screen.getByRole('link', { name: /skip to content/i })).toBeInTheDocument();
   });
 
-  it('marks modules that are not yet delivered as disabled', () => {
-    // The roadmap stays visible without pretending the routes exist.
+  it('every module in the navigation is reachable', () => {
+    // This assertion used to be its opposite: modules not yet built rendered
+    // as `aria-disabled` placeholders, and the test named whichever was still
+    // to come. Milestone 09 delivered the last of them, so there is nothing
+    // left to be disabled and the check inverts.
+    //
+    // Worth keeping in this form. A placeholder reintroduced here fails the
+    // test, which is the moment to ask whether shipping a dead nav item is
+    // really better than shipping nothing.
     renderWithProviders(<App />);
 
-    // Agents arrives in Milestone 03. Chat was disabled here until Milestone 02
-    // delivered it — the assertion moved rather than being deleted, so the
-    // roadmap behaviour stays covered as modules land.
-    expect(screen.getByText('Agents')).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('link', { name: 'Overview' })).toBeInTheDocument();
+    for (const label of ['Overview', 'Chat', 'Agents', 'Tools', 'Models', 'Evaluations', 'Cost']) {
+      expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
+    }
   });
 
   it('links to the modules that have been delivered', () => {

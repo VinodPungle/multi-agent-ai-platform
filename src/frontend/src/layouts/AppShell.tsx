@@ -27,10 +27,10 @@ interface NavigationItem {
 const navigation: readonly NavigationItem[] = [
   { label: 'Overview', href: '/' },
   { label: 'Chat', href: '/chat' },
-  { label: 'Agents', milestone: 'M03' },
-  { label: 'Tools', milestone: 'M04' },
-  { label: 'Models', milestone: 'M05' },
-  { label: 'Evaluations', milestone: 'future' },
+  { label: 'Agents', href: '/agents' },
+  { label: 'Tools', href: '/tools' },
+  { label: 'Models', href: '/models' },
+  { label: 'Evaluations', href: '/evaluations' },
   { label: 'Cost', href: '/cost' },
 ];
 

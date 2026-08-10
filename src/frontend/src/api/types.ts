@@ -118,3 +118,58 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 export type CostBreakdown = z.infer<typeof costBreakdownSchema>;
 export type CostSummary = z.infer<typeof costSummarySchema>;
 export type CostSummaryResponse = z.infer<typeof costSummaryResponseSchema>;
+
+/**
+ * Discovery contracts: what this deployment actually has registered.
+ *
+ * Prices are strings for the same reason costs are — the backend sums money as
+ * `Decimal`, and parsing into a JavaScript number would reintroduce the drift
+ * that choice exists to avoid.
+ */
+export const agentSummarySchema = z.object({
+  agent_id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  version: z.string(),
+  owner: z.string().nullable().optional(),
+  provider_id: z.string(),
+  model_id: z.string(),
+  tool_ids: z.array(z.string()),
+  temperature: z.number().nullable().optional(),
+  max_output_tokens: z.number().nullable().optional(),
+  is_enabled: z.boolean(),
+});
+
+export const toolSummarySchema = z.object({
+  tool_id: z.string(),
+  description: z.string(),
+  version: z.string(),
+  owner: z.string().nullable().optional(),
+  parameters: z.array(z.string()),
+  required_parameters: z.array(z.string()),
+  timeout_seconds: z.number(),
+  max_attempts: z.number(),
+  is_available: z.boolean(),
+});
+
+export const modelSummarySchema = z.object({
+  model_id: z.string(),
+  provider_id: z.string(),
+  display_name: z.string(),
+  version: z.string().nullable().optional(),
+  capabilities: z.array(z.string()),
+  max_context_tokens: z.number(),
+  max_output_tokens: z.number(),
+  input_cost_per_million_tokens: z.union([z.string(), z.number()]),
+  output_cost_per_million_tokens: z.union([z.string(), z.number()]),
+  currency: z.string(),
+  is_available: z.boolean(),
+});
+
+export const agentListSchema = z.array(agentSummarySchema);
+export const toolListSchema = z.array(toolSummarySchema);
+export const modelListSchema = z.array(modelSummarySchema);
+
+export type AgentSummary = z.infer<typeof agentSummarySchema>;
+export type ToolSummary = z.infer<typeof toolSummarySchema>;
+export type ModelSummary = z.infer<typeof modelSummarySchema>;

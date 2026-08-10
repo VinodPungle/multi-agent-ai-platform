@@ -76,21 +76,28 @@ services:
       # always one somebody chose — configuration validation rejects it outside
       # development regardless.
       PLATFORM_MOCK_PROVIDER__ENABLED: 'true'
-      # The agent runs on the mock provider here, overriding any .env, and that
-      # is a container limitation rather than a preference.
+      # Which provider the agent uses in the container. Mock by default, and
+      # that is a container limitation rather than a preference.
       #
-      # `DefaultAzureCredential` cannot authenticate from inside this image:
+      # `DefaultAzureCredential` cannot use `az login` from inside this image:
       # its Azure CLI link shells out to the `az` binary, which is not
       # installed, and mounting the host's ~/.azure does not help because the
-      # token cache alone is not enough. Installing the CLI would add several
-      # hundred megabytes to a development image to work around a path that is
-      # exercised properly in two better places anyway: on the host, where
-      # `az login` is real, and in Azure, where Managed Identity is.
+      # token cache alone is not enough. Left pointing at Foundry, chat fails
+      # with repeated provider errors that trip the circuit breaker — a
+      # confusing symptom for a fresh clone.
       #
-      # Left unset, chat here fails with repeated provider errors that trip the
-      # circuit breaker — a confusing symptom for a fresh clone.
-      PLATFORM_AGENT__PROVIDER_ID: mock
-      PLATFORM_AGENT__MODEL_ID: mock-echo
+      # To use the real model here, put a service principal in `.env`:
+      #
+      #   LOCAL_AGENT_PROVIDER_ID=azure-foundry
+      #   LOCAL_AGENT_MODEL_ID=fw-kimi-k3
+      #   AZURE_CLIENT_ID=...  AZURE_TENANT_ID=...  AZURE_CLIENT_SECRET=...
+      #
+      # `EnvironmentCredential` is first in the chain and needs no binary, so
+      # that path works in the container today. It is also the one place this
+      # platform accepts a secret for Azure, which is why it is opt-in and
+      # documented rather than the default.
+      PLATFORM_AGENT__PROVIDER_ID: ${LOCAL_AGENT_PROVIDER_ID:-mock}
+      PLATFORM_AGENT__MODEL_ID: ${LOCAL_AGENT_MODEL_ID:-mock-echo}
       PLATFORM_FEATURES__STREAMING: 'true'
       PLATFORM_FEATURES__MEMORY: 'true'
       # Internet search needs no API key, so it works on a fresh clone.

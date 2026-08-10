@@ -13,8 +13,10 @@
 import { Suspense, lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
+import { AgentsPage, ModelsPage, ToolsPage } from '@/features/catalogue/CataloguePages';
 import { CostBreakdownCard } from '@/features/cost-analytics/CostBreakdownCard';
 import { CostSummaryCard } from '@/features/cost-analytics/CostSummaryCard';
+import { EvaluationsPage } from '@/features/cost-analytics/EvaluationsPage';
 import { PlatformCapabilitiesCard } from '@/features/platform-status/PlatformCapabilitiesCard';
 import { PlatformStatusCard } from '@/features/platform-status/PlatformStatusCard';
 import { AppShell } from '@/layouts/AppShell';
@@ -39,6 +41,10 @@ export function App() {
           <Routes>
             <Route path="/" element={<OverviewPage />} />
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/agents" element={<AgentsPage />} />
+            <Route path="/tools" element={<ToolsPage />} />
+            <Route path="/models" element={<ModelsPage />} />
+            <Route path="/evaluations" element={<EvaluationsPage />} />
             <Route path="/cost" element={<CostPage />} />
             {/* Any unknown path returns to the overview rather than showing a
                 blank page. `replace` keeps the bad URL out of history. */}

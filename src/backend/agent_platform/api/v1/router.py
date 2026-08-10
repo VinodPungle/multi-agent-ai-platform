@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from agent_platform.api.v1 import analytics, chat, meta
+from agent_platform.api.v1 import analytics, catalogue, chat, meta
 
 __all__ = ["api_v1_router"]
 
@@ -18,8 +18,6 @@ api_v1_router = APIRouter(prefix="/v1")
 api_v1_router.include_router(meta.router)
 api_v1_router.include_router(chat.router, prefix="/chat")
 api_v1_router.include_router(analytics.router, prefix="/analytics")
-
-# Later milestones add:
-#   api_v1_router.include_router(agents.router, prefix="/agents")  # Milestone 03
-#   api_v1_router.include_router(tools.router,  prefix="/tools")   # Milestone 04
-#   api_v1_router.include_router(models.router, prefix="/models")  # Milestone 05
+# Discovery. No prefix: the paths are /agents, /tools and /models, which read
+# better as top-level collections than nested under a shared segment.
+api_v1_router.include_router(catalogue.router)
