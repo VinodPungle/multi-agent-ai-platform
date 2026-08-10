@@ -24,6 +24,7 @@ import socket
 from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 
@@ -36,7 +37,9 @@ from agent_platform_sdk.dto.tool import ToolInvocation
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
 from agent_platform_sdk.types.enums import HealthStatus
 
-pytestmark = pytest.mark.integration
+# One event loop for the whole module, because the server fixture below is
+# module-scoped and a fixture cannot outlive the loop it was created on.
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 
 CONTEXT = ExecutionContext()
 
@@ -70,17 +73,25 @@ def _build_server() -> MCPServer:
     return server
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def mcp_server_url() -> AsyncIterator[str]:
-    """Serve a real MCP server on a loopback port for the duration of a test.
+    """Serve one real MCP server for every test in this module.
+
+    **Module-scoped, and that is a fix rather than an optimisation.** A
+    per-test server meant starting and stopping uvicorn fifteen times in one
+    process, and under the full suite two tests failed intermittently with the
+    server reporting "session already exists" and closing a stream mid-request —
+    consistent with MCP session state outliving the server instance that created
+    it. One server for the module removes the churn entirely, and is
+    considerably faster besides.
+
+    Isolation is not lost: every test still opens its own MCP *session*, which
+    is what the platform does per call anyway.
 
     **uvicorn binds port 0 and the port is read back afterwards**, rather than
     the test choosing a free port and handing it over. Choosing first leaves a
-    window between "this port was free" and "uvicorn bound it", and anything
-    else on the machine can take it in between. That window is invisible when
-    this file runs alone and opens up under the full suite, where many other
-    sockets are in play — which is exactly how it was found: these tests passed
-    in isolation and failed intermittently in a complete run.
+    window between "this port was free" and "uvicorn bound it" that anything
+    else on the machine can step into.
     """
     config = uvicorn.Config(
         _build_server().streamable_http_app(),
@@ -109,11 +120,15 @@ async def mcp_server_url() -> AsyncIterator[str]:
 
 @pytest.fixture
 def session(mcp_server_url: str) -> StreamableHTTPMCPSession:
+    """A fresh client per test, against the shared server."""
     return StreamableHTTPMCPSession(server_id="weather", url=mcp_server_url)
 
 
 class TestContractConformance:
-    def test_it_satisfies_the_session_protocol(
+    # Async despite having nothing to await: the module-wide asyncio mark that
+    # gives the shared server its loop applies to every test here, and
+    # pytest-asyncio rejects a synchronous one.
+    async def test_it_satisfies_the_session_protocol(
         self,
         session: StreamableHTTPMCPSession,
     ) -> None:

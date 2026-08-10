@@ -13,6 +13,8 @@
 import { Suspense, lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
+import { CostBreakdownCard } from '@/features/cost-analytics/CostBreakdownCard';
+import { CostSummaryCard } from '@/features/cost-analytics/CostSummaryCard';
 import { PlatformCapabilitiesCard } from '@/features/platform-status/PlatformCapabilitiesCard';
 import { PlatformStatusCard } from '@/features/platform-status/PlatformStatusCard';
 import { AppShell } from '@/layouts/AppShell';
@@ -37,6 +39,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<OverviewPage />} />
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/cost" element={<CostPage />} />
             {/* Any unknown path returns to the overview rather than showing a
                 blank page. `replace` keeps the bad URL out of history. */}
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -74,6 +77,29 @@ function OverviewPage() {
         <PlatformStatusCard />
         <PlatformCapabilitiesCard />
       </div>
+
+      {/* Spend on the overview as well as on its own page: cost is the thing
+          people forget to look at, and a figure nobody passes is a figure
+          nobody reads. */}
+      <CostSummaryCard />
+    </div>
+  );
+}
+
+function CostPage() {
+  return (
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Cost and usage</h1>
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          Every model call the platform makes is measured — including the ones that failed, which
+          consumed tokens too. Costs are estimates computed from configured prices, never from an
+          invoice.
+        </p>
+      </div>
+
+      <CostSummaryCard />
+      <CostBreakdownCard />
     </div>
   );
 }

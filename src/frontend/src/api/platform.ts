@@ -8,8 +8,10 @@
 import { request, type RequestOptions } from '@/api/client';
 import { conversationSchema, type Conversation } from '@/api/chat';
 import {
+  costSummaryResponseSchema,
   healthResponseSchema,
   platformInfoSchema,
+  type CostSummaryResponse,
   type HealthResponse,
   type PlatformInfo,
 } from '@/api/types';
@@ -20,6 +22,7 @@ export const platformQueryKeys = {
   all: ['platform'] as const,
   health: () => [...platformQueryKeys.all, 'health'] as const,
   info: () => [...platformQueryKeys.all, 'info'] as const,
+  costs: () => [...platformQueryKeys.all, 'costs'] as const,
 };
 
 export const chatQueryKeys = {
@@ -70,4 +73,9 @@ export function clearConversation(
     ...options,
     method: 'DELETE',
   });
+}
+
+/** Fetch cost and usage totals for the replica that answers the request. */
+export function fetchCostSummary(options?: RequestOptions): Promise<CostSummaryResponse> {
+  return request('/api/v1/analytics/costs', costSummaryResponseSchema, options);
 }

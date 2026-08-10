@@ -47,6 +47,9 @@ from agent_platform.providers.azure_foundry.azure_foundry_embeddings import (
 from agent_platform.providers.azure_foundry.azure_foundry_provider import (
     AzureFoundryProvider,
 )
+from agent_platform.providers.local.semantic_embedding_provider import (
+    LocalSemanticEmbeddingProvider,
+)
 from agent_platform.providers.mock.hashing_embedding_provider import HashingEmbeddingProvider
 from agent_platform.providers.mock.mock_llm_provider import MockLLMProvider
 from agent_platform.registries import (
@@ -316,25 +319,40 @@ def build_tool_registry(
 def build_embedding_provider(settings: PlatformSettings) -> EmbeddingProvider:
     """Return the configured embedding provider.
 
-    The hashing provider is refused in production-like environments. It computes
-    *lexical* embeddings — shared character sequences, not meaning — and a
-    knowledge base built on it would answer confidently from documents that
-    merely look like the question. The check here mirrors the mock LLM
-    provider's, and for the same reason: something convincing enough to be
-    useful in development is exactly what gets left switched on by accident.
+    Two of the three are semantic, and the default is one of them. Retrieval
+    that matches *meaning* is the whole point of RAG, so making the lexical
+    provider the default would have shipped a pipeline that demonstrates itself
+    rather than one that works.
+
+    The hashing provider is refused in production-like environments regardless
+    of what is configured. It matches shared character sequences, and a
+    knowledge base built on it answers confidently from documents that merely
+    look like the question. The check mirrors the mock LLM provider's, for the
+    same reason: something convincing enough to be useful in development is
+    exactly what gets left switched on by accident.
     """
-    if (
-        settings.knowledge.embedding_provider == "azure-foundry"
-        or settings.app.environment.is_production_like
-    ):
+    knowledge = settings.knowledge
+    production_like = settings.app.environment.is_production_like
+
+    if knowledge.embedding_provider == "azure-foundry":
         return AzureFoundryEmbeddingProvider(
             endpoint=settings.azure_foundry.endpoint,
-            deployment=settings.knowledge.embedding_deployment,
+            deployment=knowledge.embedding_deployment,
             credential=build_azure_credential(),
-            dimensions=settings.knowledge.embedding_dimensions,
+            dimensions=knowledge.embedding_dimensions,
         )
 
-    return HashingEmbeddingProvider(dimensions=settings.knowledge.embedding_dimensions)
+    if knowledge.embedding_provider == "local" or production_like:
+        # Reached in production when `hashing` was configured: the local model
+        # is semantic and needs no cloud resource, so it is the right thing to
+        # fall back to rather than refusing to start.
+        return LocalSemanticEmbeddingProvider(
+            model_name=knowledge.local_embedding_model,
+            dimensions=knowledge.embedding_dimensions,
+            cache_directory=knowledge.local_embedding_cache_directory or None,
+        )
+
+    return HashingEmbeddingProvider(dimensions=knowledge.embedding_dimensions)
 
 
 def build_mcp_sessions(settings: PlatformSettings) -> tuple[MCPSession, ...]:

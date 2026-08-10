@@ -1443,6 +1443,25 @@ tool takes no arguments.
    no idempotency signal.
 6. **Not yet used against a third-party server.** Verified against a real MCP
    server over real HTTP, but one the test suite starts itself.
+7. **The MCP integration tests are intermittently flaky in a full-suite run** —
+   roughly one run in six, always the same two tests, and never when the file
+   runs alone (verified across many consecutive runs). Recorded rather than
+   hidden, because three plausible fixes each improved matters without
+   eliminating it:
+
+   - the fixture chose a free port and handed it to uvicorn, leaving a window
+     for anything else to bind it — uvicorn now binds port 0 and reports back;
+   - `list_tools` was not retried, so one dropped connection failed a test —
+     it is now retried, being the one idempotent operation;
+   - a server was started and stopped per test, fifteen times per run — one
+     module-scoped server now serves them all.
+
+   What remains points at MCP session state on the *server* degrading after
+   many rapid open/close cycles: the failure is always in the last tests to
+   run, and always after a dozen sessions against one server. That churn is a
+   property of the harness, not of the platform — production opens one session
+   per tool call, spread over time, against a server it does not control. It is
+   still a flaky test and it is still counted as an open problem.
 
 ### RAG, embeddings and vector store ✅
 
@@ -1450,7 +1469,8 @@ tool takes no arguments.
 | --- | --- | --- |
 | A RAG pipeline is operational | ✅ | Live: corpus indexed at startup, queried through the tool executor |
 | Documents are chunked on structure | ✅ | Paragraphs, then sentences, then a hard cut; overlapping |
-| Embeddings are provider-agnostic | ✅ | Local hashing and Azure Foundry behind one interface |
+| Embeddings are **semantic** | ✅ | Local ONNX model; paraphrase and synonym tests pass |
+| Embeddings are provider-agnostic | ✅ | Local semantic, Azure Foundry and lexical behind one interface |
 | A vector store is pluggable | ✅ | `VectorStoreProvider`; in-process exact search first |
 | Retrieval is governed by the runtime | ✅ | It is a tool, so authorisation, timeout, retry, telemetry and budget apply |
 | Re-indexing is safe | ✅ | Derived record ids replace; orphaned tails are deleted |
@@ -1496,24 +1516,22 @@ number that would look authoritative.
 
 **Known limitations.**
 
-1. **The development embedder is lexical, not semantic.** It matches shared
-   character sequences, so "car" and "automobile" are unrelated to it. Stated in
-   the class, its health output, the settings and ADR-0015, and refused in
-   production-like environments — the failure mode of a plausible fake is that
-   somebody eventually believes it. The tests deliberately assert only what it
-   genuinely does; there is no test claiming a paraphrased question finds the
-   right passage.
-2. **Retrieval quality is unmeasured.** No evaluation set, no recall or
-   precision figures. Judging it needs a real embedding model and a corpus with
-   known answers, and neither exists yet.
+1. **Retrieval quality is measured only by example, not by a benchmark.** The
+   paraphrase and synonym tests prove the property; there is no evaluation set
+   and no recall or precision figures. Judging it properly needs a corpus with
+   known answers.
+2. **The local model is an optional extra.** `uv sync --extra knowledge` pulls
+   ~200 MB of packages and downloads a 67 MB model on first start. The test
+   suite still runs on the lexical provider, which is deterministic and needs no
+   network; the semantic tests skip without the extra rather than failing.
 3. **The vector store is neither durable nor shared.** Rebuilt on every start,
    one copy per replica. The same trajectory memory took, and the same kind of
    change to fix.
-4. **No Azure AI Search implementation.** The Foundry embedding provider is
-   written but has not been run against a live deployment — there is no
-   embedding deployment provisioned. Written by introspecting the installed
-   SDK, not from memory, but *unverified against a real endpoint* and recorded
-   as such.
+4. **No Azure AI Search implementation, and the Foundry embedding provider is
+   still unverified against a live endpoint.** No embedding deployment exists
+   on the Foundry resource — creating one was blocked by the permission system.
+   The code was written by introspecting the installed SDK rather than from
+   memory, but it has not made a real call.
 5. **Text formats only.** PDF and DOCX need a parser, and a bad parser loses
    structure invisibly.
 6. **No reranking, hybrid search or query rewriting.** Each is a real
@@ -1526,6 +1544,7 @@ number that would look authoritative.
 | Every model invocation emits evaluation metadata | ✅ | Runtime records after every turn — completed, failed and streamed |
 | Metrics are collected | ✅ | Provider, model, agent, tokens, cost, latency, success |
 | Cost is queryable | ✅ | `GET /api/v1/analytics/costs`, grouped by model, provider and agent |
+| Cost is **visible in the UI** | ✅ | Spend card on the overview, full breakdown at `/cost` |
 | Telemetry cannot fail a request | ✅ | Every sink swallows; the composite enforces rather than trusts |
 | Adding a durable sink is additive | ✅ | One line in the composite's tuple |
 | No user content is recorded | ✅ | Counts, identifiers and money only — asserted against captured output |
@@ -1585,7 +1604,6 @@ out without closing the generator — the finding described above, reproduced.
 4. **Cost is an estimate** from configured prices, never an invoice. An unpriced
    model contributes zero, so it silently reads as free.
 5. **No time series.** "Today versus yesterday" needs a durable sink.
-6. **No UI.** The data is behind an API; nothing renders it.
 
 ### Deferred, and why
 

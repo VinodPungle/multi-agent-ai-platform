@@ -54,9 +54,37 @@ function urlOf(input: RequestInfo | URL): string {
 }
 
 /** Route stubbed responses by path, so both cards can be exercised together. */
-function stubApi(overrides: { health?: Response; info?: Response } = {}) {
+/**
+ * Default cost payload.
+ *
+ * The overview renders the spend card, so `App` now calls the analytics
+ * endpoint. Without a stub it falls through to the catch-all below and the
+ * resulting failure surfaces in *other* cards' error assertions — which is
+ * exactly what happened when the card was first added.
+ */
+const costsPayload = {
+  summary: {
+    overall: {
+      invocations: 0,
+      failures: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      estimated_cost: '0',
+      average_latency_ms: 0,
+    },
+    by_model: [],
+    by_provider: [],
+    by_agent: [],
+  },
+  scope: 'This process since startup.',
+};
+
+function stubApi(overrides: { health?: Response; info?: Response; costs?: Response } = {}) {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const url = urlOf(input);
+    if (url.includes('/analytics/costs')) {
+      return Promise.resolve(overrides.costs ?? jsonResponse(costsPayload));
+    }
     if (url.includes('/health')) {
       return Promise.resolve(overrides.health ?? jsonResponse(healthPayload));
     }

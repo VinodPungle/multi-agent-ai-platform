@@ -74,3 +74,47 @@ export const errorResponseSchema = z.object({
   }),
 });
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+
+/**
+ * Cost and usage totals.
+ *
+ * `estimated_cost` is a **string**, not a number, and that is deliberate on
+ * both sides of the wire. The backend sums money as `Decimal` precisely so
+ * fractions of a cent do not drift; parsing it into a JavaScript `number` here
+ * would reintroduce the error the moment it is added to anything. It is
+ * formatted for display and never used in arithmetic.
+ */
+export const usageTotalsSchema = z.object({
+  invocations: z.number().int().nonnegative(),
+  failures: z.number().int().nonnegative(),
+  prompt_tokens: z.number().int().nonnegative(),
+  completion_tokens: z.number().int().nonnegative(),
+  // A string on the wire, verified: pydantic serialises `Decimal` to a JSON
+  // string, which is what preserves the precision the backend sums with.
+  // Kept as a string here for the same reason — see `formatCost`.
+  estimated_cost: z.string(),
+  average_latency_ms: z.number().nonnegative(),
+});
+
+export const costBreakdownSchema = z.object({
+  key: z.string(),
+  usage: usageTotalsSchema,
+});
+
+export const costSummarySchema = z.object({
+  overall: usageTotalsSchema,
+  by_model: z.array(costBreakdownSchema),
+  by_provider: z.array(costBreakdownSchema),
+  by_agent: z.array(costBreakdownSchema),
+});
+
+export const costSummaryResponseSchema = z.object({
+  summary: costSummarySchema,
+  /** What the numbers cover. Rendered, never hidden — see the analytics card. */
+  scope: z.string(),
+});
+
+export type UsageTotals = z.infer<typeof usageTotalsSchema>;
+export type CostBreakdown = z.infer<typeof costBreakdownSchema>;
+export type CostSummary = z.infer<typeof costSummarySchema>;
+export type CostSummaryResponse = z.infer<typeof costSummaryResponseSchema>;

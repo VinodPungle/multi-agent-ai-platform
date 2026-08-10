@@ -366,15 +366,38 @@ class KnowledgeSettings(BaseModel):
             "return nothing, which teaches a model to stop calling it."
         ),
     )
-    embedding_provider: Literal["hashing", "azure-foundry"] = Field(
-        default="hashing",
+    embedding_provider: Literal["local", "azure-foundry", "hashing"] = Field(
+        default="local",
         description=(
-            "`hashing` computes lexical embeddings locally — no model, no cost, "
-            "no network — so the pipeline runs on a laptop and in CI. It matches "
-            "shared character sequences, **not meaning**, so retrieval quality "
-            "measured against it says nothing about a real model. "
-            "`azure-foundry` is the real one, and is required outside "
-            "development and testing."
+            "Where vectors come from. "
+            "`local` runs a real sentence-embedding model on this machine "
+            "(BAAI/bge-small-en-v1.5 through ONNX): semantic, free, no network "
+            "per query, and the default, because retrieval that matches "
+            "*meaning* is the point of RAG. Needs the `knowledge` extra. "
+            "`azure-foundry` uses a Foundry embedding deployment — also "
+            "semantic, billed per token, and the right choice once a corpus is "
+            "large enough that embedding it locally is slow. "
+            "`hashing` is lexical, not semantic: it matches shared character "
+            "sequences, so 'car' and 'automobile' are unrelated to it. It needs "
+            "no model and no network, which is why the test suite uses it, but "
+            "retrieval quality measured against it says nothing about a real "
+            "model — and it is refused outside development and testing."
+        ),
+    )
+    local_embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description=(
+            "Model for the `local` provider. The default is 384 dimensions and "
+            "67 MB; larger models in the same family cost proportionally more "
+            "download for a few points of accuracy."
+        ),
+    )
+    local_embedding_cache_directory: str = Field(
+        default="",
+        description=(
+            "Where the local model is stored. Empty uses fastembed's default. "
+            "Worth pointing at a mounted volume in a container so a restart "
+            "does not re-download the model."
         ),
     )
     documents_directory: str = Field(
@@ -427,7 +450,7 @@ class KnowledgeSettings(BaseModel):
         ),
     )
     embedding_dimensions: int = Field(
-        default=256,
+        default=384,
         gt=0,
         description=(
             "Vector length. Must match what the embedding deployment emits: an "

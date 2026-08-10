@@ -30,8 +30,8 @@ const navigation: readonly NavigationItem[] = [
   { label: 'Agents', milestone: 'M03' },
   { label: 'Tools', milestone: 'M04' },
   { label: 'Models', milestone: 'M05' },
-  { label: 'Evaluations', milestone: 'M05' },
-  { label: 'Cost', milestone: 'M08' },
+  { label: 'Evaluations', milestone: 'future' },
+  { label: 'Cost', href: '/cost' },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
