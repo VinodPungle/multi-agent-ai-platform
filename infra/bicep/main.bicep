@@ -141,6 +141,9 @@ param provisionEmbeddings bool = false
 @description('Embedding model. 1536 dimensions for text-embedding-3-small.')
 param embeddingModelName string = 'text-embedding-3-small'
 
+@description('Name of an embedding deployment on a Foundry account this template does not own. The counterpart to aiFoundryEndpoint: with provisionAiFoundry false there is no module to create one, so the deployment name has to be supplied.')
+param aiFoundryEmbeddingDeployment string = ''
+
 @description('Vector length the embedding deployment emits. Must match the model: an index is built at one dimensionality and cannot accept another.')
 param embeddingDimensions int = 1536
 
@@ -347,6 +350,14 @@ var foundryEnabled = provisionAiFoundry || !empty(aiFoundryEndpoint)
 // testing: `enforce_environment_invariants` rejects it in staging and
 // production, so a misconfigured production environment fails at startup rather
 // than serving templated text to users.
+// Provisioned by this template, or named on an account it merely uses. Empty
+// means neither, and the platform falls back to the local semantic model.
+var resolvedEmbeddingDeployment = provisionAiFoundry && provisionEmbeddings
+  ? aiFoundry!.outputs.embeddingDeploymentName
+  : aiFoundryEmbeddingDeployment
+
+var embeddingsAvailable = foundryEnabled && !empty(resolvedEmbeddingDeployment)
+
 var effectiveProviderId = foundryEnabled ? 'azure-foundry' : 'mock'
 var effectiveModelId = foundryEnabled ? platformModelId : 'mock-echo'
 
@@ -451,17 +462,22 @@ module backendApp 'modules/container-app.bicep' = {
       { name: 'PLATFORM_KNOWLEDGE__ENABLED', value: string(enableKnowledge) }
       {
         name: 'PLATFORM_KNOWLEDGE__EMBEDDING_PROVIDER'
-        value: provisionEmbeddings ? 'azure-foundry' : 'local'
+        value: embeddingsAvailable ? 'azure-foundry' : 'local'
       }
-      {
-        name: 'PLATFORM_KNOWLEDGE__EMBEDDING_DEPLOYMENT'
-        value: provisionEmbeddings && provisionAiFoundry ? aiFoundry!.outputs.embeddingDeploymentName : ''
-      }
+      { name: 'PLATFORM_KNOWLEDGE__EMBEDDING_DEPLOYMENT', value: resolvedEmbeddingDeployment }
+      // 384 is the local model's. A mismatch here builds an index nothing can
+      // search, which is why the provider checks it against the model at startup.
       {
         name: 'PLATFORM_KNOWLEDGE__EMBEDDING_DIMENSIONS'
-        value: string(provisionEmbeddings ? embeddingDimensions : 384)
+        value: string(embeddingsAvailable ? embeddingDimensions : 384)
       }
-      { name: 'PLATFORM_KNOWLEDGE__MINIMUM_SCORE', value: provisionEmbeddings ? knowledgeMinimumScore : '0.0' }
+      // Only meaningful with an embedder whose scores leave headroom. Measured:
+      // the local model's noise floor sits level with its genuine hits, so a
+      // threshold there would discard real answers.
+      {
+        name: 'PLATFORM_KNOWLEDGE__MINIMUM_SCORE'
+        value: embeddingsAvailable ? knowledgeMinimumScore : '0.0'
+      }
       { name: 'PLATFORM_AGENT__PROVIDER_ID', value: effectiveProviderId }
       { name: 'PLATFORM_AGENT__MODEL_ID', value: effectiveModelId }
       // The mock answers with templated text. Configuration validation rejects

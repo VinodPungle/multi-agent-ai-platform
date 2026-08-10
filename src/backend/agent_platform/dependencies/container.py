@@ -89,6 +89,7 @@ from agent_platform_sdk.interfaces.model_router import ModelRouter
 from agent_platform_sdk.interfaces.provider import Provider
 from agent_platform_sdk.interfaces.search_provider import SearchProvider
 from agent_platform_sdk.interfaces.tool_provider import ToolProvider
+from agent_platform_sdk.interfaces.vector_store_provider import VectorStoreProvider
 from agent_platform_sdk.interfaces.workflow_engine import WorkflowEngine
 from agent_platform_sdk.policies.budget import BudgetPolicy
 from agent_platform_shared.clock import SystemClock
@@ -441,9 +442,12 @@ def build_agent_registry(settings: PlatformSettings, gateway: LLMGateway) -> Age
 
 
 def build_health_probes(
+    settings: PlatformSettings,
     memory: MemoryProvider,
     prompts: FilePromptProvider,
     search: SearchProvider,
+    embeddings: EmbeddingProvider,
+    vectors: VectorStoreProvider,
     llm_providers: tuple[LLMProvider, ...],
 ) -> tuple[Provider, ...]:
     """Return every component ``/ready`` should probe.
@@ -451,8 +455,14 @@ def build_health_probes(
     Order is deliberate — memory, prompts, then inference. A readiness payload
     reads top to bottom, and the cheapest, most fundamental dependencies should
     be the first lines an operator sees.
+
+    The knowledge components are probed only when the feature is on. Reporting
+    an idle vector store and an unloaded embedding model on every deployment
+    would add two permanently uninteresting lines to a payload whose value is
+    that every line in it matters.
     """
-    return (memory, prompts, search, *llm_providers)
+    knowledge: tuple[Provider, ...] = (vectors, embeddings) if settings.knowledge.enabled else ()
+    return (memory, prompts, search, *knowledge, *llm_providers)
 
 
 class ApplicationContainer(containers.DeclarativeContainer):
@@ -656,9 +666,12 @@ class ApplicationContainer(containers.DeclarativeContainer):
         clock=clock,
         providers=providers.Callable(
             build_health_probes,
+            settings,
             memory_provider,
             prompt_provider,
             search_provider,
+            embedding_provider,
+            vector_store,
             llm_providers,
         ),
     )

@@ -76,11 +76,41 @@ services:
       # always one somebody chose — configuration validation rejects it outside
       # development regardless.
       PLATFORM_MOCK_PROVIDER__ENABLED: 'true'
+      # The agent runs on the mock provider here, overriding any .env, and that
+      # is a container limitation rather than a preference.
+      #
+      # `DefaultAzureCredential` cannot authenticate from inside this image:
+      # its Azure CLI link shells out to the `az` binary, which is not
+      # installed, and mounting the host's ~/.azure does not help because the
+      # token cache alone is not enough. Installing the CLI would add several
+      # hundred megabytes to a development image to work around a path that is
+      # exercised properly in two better places anyway: on the host, where
+      # `az login` is real, and in Azure, where Managed Identity is.
+      #
+      # Left unset, chat here fails with repeated provider errors that trip the
+      # circuit breaker — a confusing symptom for a fresh clone.
+      PLATFORM_AGENT__PROVIDER_ID: mock
+      PLATFORM_AGENT__MODEL_ID: mock-echo
       PLATFORM_FEATURES__STREAMING: 'true'
       PLATFORM_FEATURES__MEMORY: 'true'
       # Internet search needs no API key, so it works on a fresh clone.
       PLATFORM_FEATURES__SEARCH: 'true'
       PLATFORM_SEARCH__PROVIDER: duckduckgo
+      # Retrieval over the documents in `knowledge/`, registered as a tool the
+      # agent calls when a question is about this organisation rather than the
+      # public internet.
+      PLATFORM_KNOWLEDGE__ENABLED: 'true'
+      # A real sentence-embedding model, running locally: semantic, free, and no
+      # Azure resource needed to try RAG on a fresh clone. The model downloads
+      # once on first start, which is why the cache is a named volume below.
+      PLATFORM_KNOWLEDGE__EMBEDDING_PROVIDER: local
+      PLATFORM_KNOWLEDGE__EMBEDDING_DIMENSIONS: '384'
+      PLATFORM_KNOWLEDGE__LOCAL_EMBEDDING_CACHE_DIRECTORY: /app/.cache/models
+      # Zero, deliberately. Measured against this corpus, the local model's
+      # noise floor sits level with its genuine hits, so any threshold here
+      # would discard real answers. Only the Foundry embedder leaves headroom.
+      PLATFORM_KNOWLEDGE__MINIMUM_SCORE: '0.0'
+      PLATFORM_AGENT__TOOL_IDS: internet-search,knowledge-search
     volumes:
       # Source is mounted so edits reload without a rebuild. Read-only: a
       # container must never write into the working tree.
@@ -90,6 +120,12 @@ services:
       # Prompt assets, so editing one takes effect on reload rather than needing
       # an image rebuild. Read-only, like the source.
       - ./prompts:/app/prompts:ro
+      # The corpus, so editing a document and restarting re-indexes it.
+      - ./knowledge:/app/knowledge:ro
+      # Named volume for the embedding model, so a restart does not re-download
+      # 67 MB. Not a bind mount: the model is a build artefact of the container,
+      # not something that belongs in the working tree.
+      - embedding-models:/app/.cache/models
     healthcheck:
       test:
         [
@@ -137,3 +173,13 @@ services:
         # does not race a still-starting API.
         condition: service_healthy
     restart: unless-stopped
+
+# -----------------------------------------------------------------------------
+# Named volumes
+# -----------------------------------------------------------------------------
+
+volumes:
+  # The local embedding model. Downloaded once on first start and kept across
+  # restarts and rebuilds — without this, every `docker compose up` would pull
+  # 67 MB again before the platform could answer a knowledge question.
+  embedding-models:

@@ -67,7 +67,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM dependencies AS development
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-workspace
+    # `--extra knowledge` brings the local ONNX embedding model, so retrieval
+    # in development matches meaning rather than shared character sequences.
+    # It costs roughly 200 MB here and a 67 MB model download on first start;
+    # the production stage deliberately omits it, because a deployed
+    # environment embeds through Azure AI Foundry.
+    uv sync --frozen --extra knowledge --no-install-workspace
 
 COPY src/shared ./src/shared
 COPY src/sdk ./src/sdk
@@ -77,10 +82,13 @@ COPY src/backend ./src/backend
 # at startup and refuses to serve an agent whose prompt is missing.
 COPY prompts ./prompts
 
+# The knowledge corpus, indexed at startup when the feature is enabled.
+COPY knowledge ./knowledge
+
 # Editable installs, so a bind-mounted source edit takes effect without a
 # rebuild. Compose overlays the host directories over these paths.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen
+    uv sync --frozen --extra knowledge
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
@@ -123,6 +131,7 @@ COPY --chown=platform:platform src/backend/agent_platform ./src/backend/agent_pl
 # fails its first request with "No prompt registered" — a deployment that looks
 # healthy and cannot answer.
 COPY --chown=platform:platform prompts ./prompts
+COPY --chown=platform:platform knowledge ./knowledge
 
 # The venv holds third-party dependencies only (`--no-install-workspace` above);
 # our own packages are resolved from source, which keeps the image free of build
