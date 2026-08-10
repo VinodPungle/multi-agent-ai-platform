@@ -72,6 +72,12 @@ param aiFoundryDeploymentSku string = 'DataZoneStandard'
 @minValue(1)
 param aiFoundryDeploymentCapacity int = 25
 
+@description('Published input price per million tokens. Zero means the cost dashboard reports zero rather than a fabricated figure — the inference API does not report spend, so this is the only source of it.')
+param inputCostPerMillionTokens string = '0'
+
+@description('Published output price per million tokens. Usually several times the input rate.')
+param outputCostPerMillionTokens string = '0'
+
 @description('Platform-wide model id this deployment serves. Appears in telemetry and cost rows.')
 param platformModelId string = 'fw-kimi-k3'
 
@@ -455,6 +461,17 @@ module backendApp 'modules/container-app.bicep' = {
       { name: 'PLATFORM_AZURE_FOUNDRY__ENDPOINT', value: resolvedFoundryEndpoint }
       { name: 'PLATFORM_AZURE_FOUNDRY__DEPLOYMENT', value: aiFoundryDeploymentName }
       { name: 'PLATFORM_AZURE_FOUNDRY__MODEL_ID', value: platformModelId }
+      // Prices are configuration because the inference API does not report
+      // spend. Left at zero, cost analytics reports zero — which is honest,
+      // and means an unpriced deployment reads as free.
+      {
+        name: 'PLATFORM_AZURE_FOUNDRY__INPUT_COST_PER_MILLION_TOKENS'
+        value: inputCostPerMillionTokens
+      }
+      {
+        name: 'PLATFORM_AZURE_FOUNDRY__OUTPUT_COST_PER_MILLION_TOKENS'
+        value: outputCostPerMillionTokens
+      }
       { name: 'PLATFORM_ROUTING__OBJECTIVE', value: routingObjective }
       // Knowledge base. The embedding provider follows the deployment: with one
       // provisioned the platform uses it, otherwise it falls back to the local
@@ -496,7 +513,14 @@ module backendApp 'modules/container-app.bicep' = {
       { name: 'PLATFORM_FEATURES__EVALUATION', value: 'true' }
       { name: 'PLATFORM_FEATURES__SEARCH', value: 'true' }
       { name: 'PLATFORM_SEARCH__PROVIDER', value: searchProvider }
-      { name: 'PLATFORM_AGENT__TOOL_IDS', value: 'internet-search' }
+      // Tools the agent may call. `knowledge-search` is listed only when the
+      // knowledge base is on: an agent that declares a tool the registry does
+      // not hold gets a model told it can search documents and a tool call
+      // that resolves to nothing.
+      {
+        name: 'PLATFORM_AGENT__TOOL_IDS'
+        value: enableKnowledge ? 'internet-search,knowledge-search' : 'internet-search'
+      }
     ]
     keyVaultSecrets: concat(
       [

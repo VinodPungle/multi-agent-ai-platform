@@ -152,6 +152,29 @@ template can only grant roles on resources it creates.
 
 ## 6. Redeploying
 
+**`azd provision` resets the container image. Always follow it with
+`azd deploy`.**
+
+This is the single most confusing behaviour in the deployment, and it was
+found the hard way. The Container Apps module deploys a placeholder image
+(`mcr.microsoft.com/k8se/quickstart`) when it has no image to use, so a
+`provision` after a `deploy` reverts the app to the placeholder. Because the
+placeholder fails the readiness probe, Container Apps keeps the *previous*
+revision serving traffic — so the platform stays up, answering from old code,
+and nothing reports an error.
+
+The symptom is a successful deployment where a newly added endpoint returns
+404 and newly added configuration has no effect. Check what is actually
+running:
+
+```bash
+az containerapp show -n <app> -g <rg> \
+  --query 'properties.template.containers[0].image' -o tsv
+```
+
+`mcr.microsoft.com/k8se/quickstart:latest` means the image was reset; run
+`azd deploy`. `azd up` does both in the right order and does not have this
+problem.
 `azd up` is idempotent. Role assignments use deterministic GUIDs derived from
 scope, principal and role, so a rerun updates the existing assignment instead of
 failing on a duplicate.

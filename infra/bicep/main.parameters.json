@@ -109,6 +109,12 @@
     },
     "knowledgeMinimumScore": {
       "value": "${KNOWLEDGE_MINIMUM_SCORE=0.2}"
+    },
+    "inputCostPerMillionTokens": {
+      "value": "${INPUT_COST_PER_MILLION_TOKENS=0}"
+    },
+    "outputCostPerMillionTokens": {
+      "value": "${OUTPUT_COST_PER_MILLION_TOKENS=0}"
     }
   },
   "//tavilyApiKey": {

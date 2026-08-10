@@ -1879,3 +1879,82 @@ so nothing new is billed for inference capacity.
 
 To remove everything: `azd down --purge` — `--purge` matters, or Key Vault's
 soft delete holds the name for 7 days.
+
+---
+
+## Deployment — 2026-08-10
+
+Milestone 09 deployed to both targets, with the knowledge base on.
+
+### Local ✅
+
+`docker compose up` — three documents indexed into six passages by the local
+semantic model, eight components healthy, chat answering, cost analytics
+grouping by model, provider and agent.
+
+```
+in-memory-vectors            healthy   6 vector(s) across 1 collection(s)
+local-semantic-embeddings    healthy   BAAI/bge-small-en-v1.5 at 384 dimensions
+knowledge-search             [0.628]   cost-controls.md
+```
+
+### Azure ✅
+
+```
+overall: healthy
+  in-memory-vectors          healthy   6 vector(s) across 1 collection(s)
+  azure-foundry-embeddings   healthy   text-embedding-3-small at 1536 dimensions
+  azure-foundry              healthy   Configured for deployment 'FW-Kimi-K3'
+```
+
+A live question answered by `FW-Kimi-K3`, grounded in retrieved documents and
+citing them by filename:
+
+> According to the internal document **Cost Controls** (`cost-controls.md`),
+> the platform treats cost as an architectural concern … a turn that would
+> breach a budget is refused *before* a model is called, "because refusing
+> afterwards has already spent the money."
+
+2406 prompt / 697 completion tokens, 11.0 s. Cost analytics recorded it under
+`fw-kimi-k3` / `azure-foundry` / `chat-agent`.
+
+### Four deployment defects this found
+
+None was reachable from the test suite, and every one produced a *successful*
+deployment of something that did not work.
+
+1. **Bicep parameters azd could not set.** `azd` binds parameters through
+   `main.parameters.json`; anything missing from it silently takes its Bicep
+   default. The knowledge base was configured, provisioned and had no effect.
+   Twenty-three parameters were affected, including Redis, alerting, replica
+   counts and the routing objective — all documented as configurable and none
+   of them reachable. A test now compares the two files in both directions.
+
+2. **`azd provision` reverts the container image to the Container Apps
+   placeholder.** Because the placeholder fails the readiness probe, the
+   previous revision keeps serving — so the platform stays up, answering from
+   old code, and reports success. The symptom was a new endpoint returning 404
+   after a deployment that said it worked. Recorded in the runbook with the
+   command to check what is actually running.
+
+3. **The agent was never given the knowledge tool.** Bicep set
+   `PLATFORM_AGENT__TOOL_IDS` to `internet-search` only, so the model replied
+   "I don't have access to an internal knowledge base" — correctly, and to a
+   platform that had one indexed and healthy.
+
+4. **Model pricing was not a parameter**, so cost analytics reported zero for
+   every deployed request. Honest, and useless. Now settable, still defaulting
+   to zero rather than a fabricated rate.
+
+### Known limitations of this deployment
+
+1. **Cost still reports zero** until someone sets the published rates for
+   `FW-Kimi-K3`. I did not invent them.
+2. **Conversation memory is still in-process.** `provisionRedis` is false in
+   development; a cache bills continuously.
+3. **The vector index is per-replica and rebuilt on every start.** Six
+   passages costs a fraction of a cent to embed; a real corpus would not.
+4. **Local containers cannot use Azure AI Foundry.** `DefaultAzureCredential`
+   needs the `az` binary, which the image does not carry, so Compose pins the
+   agent to the mock provider. The real provider is exercised on the host and
+   in Azure.
