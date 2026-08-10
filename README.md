@@ -204,6 +204,7 @@ Managed Identity in Azure, with no code difference between them.
 | [`.claude/CLAUDE.md`](.claude/CLAUDE.md) | Engineering rules and platform principles |
 | [`.claude/project-spec.md`](.claude/project-spec.md) | Product requirements |
 | [`.claude/architecture.md`](.claude/architecture.md) | Architecture design document |
+| [`docs/user-guide/`](docs/user-guide/) | Building a business solution on the platform |
 | [`docs/engineering-handbook.md`](docs/engineering-handbook.md) | Backend, frontend and DevOps standards |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records |
 | [`docs/milestones/`](docs/milestones/) | Milestone definitions and status |
