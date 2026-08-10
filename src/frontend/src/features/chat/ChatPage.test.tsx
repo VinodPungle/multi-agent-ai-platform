@@ -191,6 +191,19 @@ describe('ChatPage', () => {
     });
   });
 
+  it('says which model answered', async () => {
+    // Not decoration. Routing chooses per turn, so the model that answered is
+    // not necessarily the one the agent is configured with or the one a user
+    // picked — and two answers from different models are otherwise identical
+    // on screen.
+    renderWithProviders(<ChatPage />);
+
+    await send('hello');
+
+    expect(await screen.findByText(/Answered by/)).toBeInTheDocument();
+    expect(screen.getByText('mock-echo')).toBeInTheDocument();
+  });
+
   it('continues the conversation the server named', async () => {
     renderWithProviders(<ChatPage />);
 

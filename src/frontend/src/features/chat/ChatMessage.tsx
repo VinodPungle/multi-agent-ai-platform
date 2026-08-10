@@ -82,6 +82,19 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 {message.error}
               </p>
             )}
+
+            {/* Which model actually answered.
+
+                Shown per message rather than once at the top of the page,
+                because it can differ between turns: routing chooses per turn,
+                and a model pinned for one question is not pinned for the next.
+                Two answers from different models would otherwise look
+                identical. */}
+            {message.modelId && (
+              <p className="mt-2 border-t border-border/60 pt-2 text-xs text-muted-foreground">
+                Answered by <span className="font-mono">{message.modelId}</span>
+              </p>
+            )}
           </>
         )}
       </div>

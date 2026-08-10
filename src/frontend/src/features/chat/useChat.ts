@@ -43,6 +43,16 @@ export interface ChatMessageView {
    * a grounded answer from an invented one.
    */
   tools?: readonly ToolActivity[];
+  /**
+   * The model that actually produced this answer.
+   *
+   * Worth showing rather than assuming, because it is not always the one the
+   * agent is configured with or the one a user picked: routing policy chooses
+   * per turn, and the whole point of recording the decision is that the answer
+   * can be attributed. A transcript that hides it makes two answers from
+   * different models look identical.
+   */
+  modelId?: string;
 }
 
 export interface ChatState {
@@ -110,6 +120,10 @@ export function useChat() {
           switch (event.type) {
             case 'started':
               setConversationId(event.conversation_id);
+              // Stamped on the message as soon as the stream opens, so it is
+              // visible while the answer is still arriving rather than only
+              // after it lands.
+              finalise(assistantId, { modelId: event.model_id });
               break;
             case 'tool':
               // Recorded against the message, not shown as a transient toast:
