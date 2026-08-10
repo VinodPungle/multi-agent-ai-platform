@@ -1,9 +1,14 @@
 /**
  * Per-turn generation controls: model, temperature and output cap.
  *
- * Collapsed by default. Most turns want the agent's configured behaviour, and a
- * row of sliders above the message box invites fiddling with settings whose
- * effect is hard to see — so the panel is available rather than present.
+ * The model selector is always visible; temperature and the token cap sit
+ * behind an "Advanced" toggle.
+ *
+ * All three started collapsed together, and that was wrong. Choosing a model is
+ * the setting people come to this screen looking for, and one hidden behind a
+ * link nobody clicks is a control that does not exist. The other two genuinely
+ * are occasional — and they take a sentence each to explain, which is more than
+ * belongs above a message box.
  *
  * Every control has an explicit "agent default" position rather than starting
  * at some number. That distinction is real, not cosmetic: unset means *the
@@ -36,9 +41,48 @@ export function ChatSettings({ value, onChange, disabled = false }: ChatSettings
     value.maxOutputTokens !== undefined ? 'tokens' : undefined,
   ].filter(Boolean).length;
 
+  const available = (models ?? []).filter((model) => model.is_available);
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        {/* The model selector sits here, always visible, rather than inside the
+            panel below.
+
+            It started collapsed with the other two and that was the wrong call:
+            choosing a model is the setting people come looking for, and a
+            control nobody can find is a control that does not exist. Temperature
+            and the token cap stay behind the toggle — they are adjusted rarely
+            and take more room to explain. */}
+        <label className="flex items-center gap-2 text-xs">
+          <span className="font-medium uppercase tracking-wide text-muted-foreground">Model</span>
+          <select
+            value={value.modelId ?? AGENT_DEFAULT}
+            disabled={disabled}
+            onChange={(event) => {
+              onChange({ ...value, modelId: event.target.value || undefined });
+            }}
+            aria-label="Model"
+            className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+          >
+            <option value={AGENT_DEFAULT}>Agent default</option>
+            {available.map((model) => (
+              <option key={model.model_id} value={model.model_id}>
+                {model.model_id}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* An empty catalogue is worth saying out loud. A lone "Agent default"
+            option looks like a working control with nothing to pick, when in
+            fact the model list failed to load or no provider is registered. */}
+        {available.length === 0 ? (
+          <span className="text-xs text-muted-foreground">
+            No models listed — routing will use the agent’s own.
+          </span>
+        ) : null}
+
         <button
           type="button"
           onClick={() => {
@@ -47,7 +91,7 @@ export function ChatSettings({ value, onChange, disabled = false }: ChatSettings
           aria-expanded={open}
           className="text-xs font-medium text-muted-foreground underline-offset-4 hover:underline"
         >
-          {open ? 'Hide settings' : 'Settings'}
+          {open ? 'Hide advanced' : 'Advanced'}
         </button>
         {/* Shown whether or not the panel is open: an override left in place is
             exactly the thing someone forgets, and then wonders why answers
@@ -71,31 +115,7 @@ export function ChatSettings({ value, onChange, disabled = false }: ChatSettings
       </div>
 
       {open ? (
-        <div className="grid gap-4 rounded-lg border border-border bg-card p-4 sm:grid-cols-3">
-          <label className="flex flex-col gap-1.5 text-xs">
-            <span className="font-medium uppercase tracking-wide text-muted-foreground">Model</span>
-            <select
-              value={value.modelId ?? AGENT_DEFAULT}
-              disabled={disabled}
-              onChange={(event) => {
-                onChange({ ...value, modelId: event.target.value || undefined });
-              }}
-              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
-            >
-              <option value={AGENT_DEFAULT}>Agent default (routing chooses)</option>
-              {(models ?? [])
-                .filter((model) => model.is_available)
-                .map((model) => (
-                  <option key={model.model_id} value={model.model_id}>
-                    {model.model_id}
-                  </option>
-                ))}
-            </select>
-            <span className="text-muted-foreground">
-              A model that cannot serve the turn is refused, not swapped.
-            </span>
-          </label>
-
+        <div className="grid gap-4 rounded-lg border border-border bg-card p-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 text-xs">
             <span className="font-medium uppercase tracking-wide text-muted-foreground">
               Temperature

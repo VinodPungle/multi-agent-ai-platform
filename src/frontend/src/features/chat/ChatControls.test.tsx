@@ -54,7 +54,16 @@ afterEach(() => {
 });
 
 describe('ChatSettings', () => {
-  it('is collapsed until asked for', () => {
+  it('shows the model selector without anything having to be opened', () => {
+    // The regression this pins: the selector shipped inside the collapsed
+    // panel, where nobody found it.
+    stub(MODELS);
+    renderWithProviders(<ChatSettings value={{}} onChange={vi.fn()} />);
+
+    expect(screen.getByLabelText('Model')).toBeInTheDocument();
+  });
+
+  it('keeps temperature behind the toggle', () => {
     stub(MODELS);
     renderWithProviders(<ChatSettings value={{}} onChange={vi.fn()} />);
 
@@ -63,23 +72,27 @@ describe('ChatSettings', () => {
 
   it('offers the agent default rather than preselecting a model', async () => {
     stub(MODELS);
-    const user = userEvent.setup();
     renderWithProviders(<ChatSettings value={{}} onChange={vi.fn()} />);
-
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
 
     expect(await screen.findByRole('option', { name: /Agent default/ })).toBeInTheDocument();
   });
 
   it('does not offer a model that has been withdrawn from routing', async () => {
     stub(MODELS);
-    const user = userEvent.setup();
     renderWithProviders(<ChatSettings value={{}} onChange={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
     await screen.findByRole('option', { name: 'fw-kimi-k3' });
 
     expect(screen.queryByRole('option', { name: 'retired-model' })).not.toBeInTheDocument();
+  });
+
+  it('says so when the catalogue lists no usable model', async () => {
+    // A lone "Agent default" option looks like a working control with nothing
+    // to pick, rather than a catalogue that failed to load.
+    stub([]);
+    renderWithProviders(<ChatSettings value={{}} onChange={vi.fn()} />);
+
+    expect(await screen.findByText(/No models listed/i)).toBeInTheDocument();
   });
 
   it('shows nothing overridden when every control is at its default', () => {
