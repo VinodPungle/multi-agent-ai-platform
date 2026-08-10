@@ -78,6 +78,9 @@ param inputCostPerMillionTokens string = '0'
 @description('Published output price per million tokens. Usually several times the input rate.')
 param outputCostPerMillionTokens string = '0'
 
+@description('ISO 4217 code the two rates above are quoted in. Azure publishes Foundry prices in the billing currency of the subscription, so a rate taken from an Indian portal is INR and rendering it as USD understates the bill by an order of magnitude.')
+param pricingCurrency string = 'USD'
+
 @description('Platform-wide model id this deployment serves. Appears in telemetry and cost rows.')
 param platformModelId string = 'fw-kimi-k3'
 
@@ -472,6 +475,7 @@ module backendApp 'modules/container-app.bicep' = {
         name: 'PLATFORM_AZURE_FOUNDRY__OUTPUT_COST_PER_MILLION_TOKENS'
         value: outputCostPerMillionTokens
       }
+      { name: 'PLATFORM_AZURE_FOUNDRY__PRICING_CURRENCY', value: pricingCurrency }
       { name: 'PLATFORM_ROUTING__OBJECTIVE', value: routingObjective }
       // Knowledge base. The embedding provider follows the deployment: with one
       // provisioned the platform uses it, otherwise it falls back to the local

@@ -89,7 +89,14 @@ describe('formatPrice', () => {
   });
 
   it('shows a configured rate per million tokens', () => {
-    expect(formatPrice('0.6')).toBe('$0.60/M');
+    expect(formatPrice('0.6', 'USD')).toBe('$0.60/M');
+  });
+
+  it("uses the model's own currency rather than assuming dollars", () => {
+    const inr = formatPrice('99.95', 'INR');
+
+    expect(inr).toContain('99.95');
+    expect(inr).not.toContain('$');
   });
 });
 

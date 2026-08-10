@@ -30,6 +30,7 @@ afterEach(() => {
 
 const EMPTY = {
   summary: {
+    currency: 'USD',
     overall: {
       invocations: 0,
       failures: 0,
@@ -47,6 +48,7 @@ const EMPTY = {
 
 const POPULATED = {
   summary: {
+    currency: 'USD',
     overall: {
       invocations: 12,
       failures: 2,
@@ -98,6 +100,25 @@ const POPULATED = {
 };
 
 describe('formatCost', () => {
+  it('renders the currency the backend reported, not an assumed dollar', () => {
+    // An INR figure shown with a dollar sign understates the bill by an order
+    // of magnitude — and looks entirely plausible while doing it.
+    expect(formatCost('420.86', 'INR')).toContain('420.86');
+    expect(formatCost('420.86', 'INR')).not.toContain('$');
+  });
+
+  it('renders an unrecognised but well-formed code beside the amount', () => {
+    // Intl accepts any three-letter code and uses it in place of a symbol,
+    // rather than throwing. Verified, not assumed.
+    expect(formatCost('12.5', 'ZZZ')).toContain('12.50');
+  });
+
+  it('falls back rather than throwing inside a render on a malformed code', () => {
+    // Intl throws RangeError for anything that is not three letters — a render
+    // is the worst place to discover that.
+    expect(formatCost('12.5', 'US')).toBe('12.50 US');
+  });
+
   it('shows sub-cent amounts to four places rather than rounding to zero', () => {
     expect(formatCost('0.0042')).toBe('$0.0042');
   });
@@ -113,7 +134,7 @@ describe('formatCost', () => {
   });
 
   it('shows zero explicitly rather than as an empty value', () => {
-    expect(formatCost('0')).toBe('$0.0000');
+    expect(formatCost('0')).toBe('$0.00');
   });
 
   it('shows an unparseable value verbatim rather than NaN', () => {

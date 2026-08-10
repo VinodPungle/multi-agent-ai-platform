@@ -76,6 +76,15 @@ class CostSummary(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    currency: str = Field(
+        default="USD",
+        description=(
+            "ISO 4217 code every figure here is denominated in. Reported rather "
+            "than assumed, because the platform converts between currencies "
+            "nowhere and a total rendered with the wrong symbol is worse than "
+            "no total at all."
+        ),
+    )
     overall: UsageTotals = Field(default_factory=UsageTotals)
     by_model: tuple[CostBreakdown, ...] = Field(default=())
     by_provider: tuple[CostBreakdown, ...] = Field(default=())

@@ -48,7 +48,7 @@ export function useModels(): UseQueryResult<ModelSummary[], ApiError> {
  * told what, and showing free would make every cost figure derived from it
  * quietly wrong.
  */
-export function formatPrice(value: string | number): string {
+export function formatPrice(value: string | number, currency = 'USD'): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) {
     return String(value);
@@ -56,7 +56,19 @@ export function formatPrice(value: string | number): string {
   if (amount === 0) {
     return 'Not priced';
   }
-  return `$${amount.toFixed(2)}/M`;
+  try {
+    const formatted = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      // Rates are published to several decimals; two is enough to compare
+      // models and does not pretend to more precision than a decision needs.
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+    return `${formatted}/M`;
+  } catch {
+    return `${amount.toFixed(2)} ${currency}/M`;
+  }
 }
 
 /** Format a token count compactly — context windows run to seven digits. */

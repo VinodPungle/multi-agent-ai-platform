@@ -54,7 +54,7 @@ function failureRate(row: CostBreakdown): { label: string; failing: boolean } {
   };
 }
 
-function ModelRow({ row }: { row: CostBreakdown }) {
+function ModelRow({ row, currency }: { row: CostBreakdown; currency: string }) {
   const failures = failureRate(row);
 
   return (
@@ -71,7 +71,7 @@ function ModelRow({ row }: { row: CostBreakdown }) {
       </td>
       <td className="py-3 pr-4 text-right text-sm tabular-nums">{verbosity(row)}</td>
       <td className="py-3 text-right text-sm tabular-nums">
-        {formatCost(row.usage.estimated_cost)}
+        {formatCost(row.usage.estimated_cost, currency)}
       </td>
     </tr>
   );
@@ -125,7 +125,7 @@ export function EvaluationsPage() {
                 </thead>
                 <tbody>
                   {data.summary.by_model.map((row) => (
-                    <ModelRow key={row.key} row={row} />
+                    <ModelRow key={row.key} row={row} currency={data.summary.currency} />
                   ))}
                 </tbody>
               </table>
@@ -158,7 +158,7 @@ export function EvaluationsPage() {
                 </thead>
                 <tbody>
                   {data.summary.by_agent.map((row) => (
-                    <ModelRow key={row.key} row={row} />
+                    <ModelRow key={row.key} row={row} currency={data.summary.currency} />
                   ))}
                 </tbody>
               </table>

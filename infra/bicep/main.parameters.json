@@ -115,6 +115,9 @@
     },
     "outputCostPerMillionTokens": {
       "value": "${OUTPUT_COST_PER_MILLION_TOKENS=0}"
+    },
+    "pricingCurrency": {
+      "value": "${PRICING_CURRENCY=USD}"
     }
   },
   "//tavilyApiKey": {

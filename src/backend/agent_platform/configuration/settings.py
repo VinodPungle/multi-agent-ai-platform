@@ -756,6 +756,20 @@ class AzureFoundrySettings(BaseModel):
         ),
     )
     output_cost_per_million_tokens: Decimal = Field(default=Decimal(0), ge=0)
+    pricing_currency: str = Field(
+        default="USD",
+        min_length=3,
+        max_length=3,
+        description=(
+            "ISO 4217 code the rates above are quoted in. Not cosmetic: Azure "
+            "publishes Foundry prices in the billing currency of the "
+            "subscription, so a rate taken from an Indian portal is in INR, and "
+            "rendering it with a dollar sign understates the bill by an order of "
+            "magnitude. The platform converts between currencies nowhere, so a "
+            "deployment pricing two providers differently would produce a "
+            "meaningless total."
+        ),
+    )
 
     cold_start_timeout_seconds: float = Field(
         default=120.0,

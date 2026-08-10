@@ -64,6 +64,7 @@ function urlOf(input: RequestInfo | URL): string {
  */
 const costsPayload = {
   summary: {
+    currency: 'USD',
     overall: {
       invocations: 0,
       failures: 0,

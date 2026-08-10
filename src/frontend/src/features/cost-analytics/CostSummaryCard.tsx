@@ -31,14 +31,14 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
   );
 }
 
-function Metrics({ totals }: { totals: UsageTotals }) {
+function Metrics({ totals, currency }: { totals: UsageTotals; currency: string }) {
   const tokens = totals.prompt_tokens + totals.completion_tokens;
 
   return (
     <dl className="grid grid-cols-2 gap-5 sm:grid-cols-4">
       <Metric
         label="Estimated cost"
-        value={formatCost(totals.estimated_cost)}
+        value={formatCost(totals.estimated_cost, currency)}
         hint="From configured prices"
       />
       <Metric
@@ -103,7 +103,7 @@ export function CostSummaryCard() {
             Nothing recorded yet. Send a message in Chat and the totals appear here.
           </p>
         ) : (
-          <Metrics totals={data.summary.overall} />
+          <Metrics totals={data.summary.overall} currency={data.summary.currency} />
         )}
 
         {!isPending && !isError ? (

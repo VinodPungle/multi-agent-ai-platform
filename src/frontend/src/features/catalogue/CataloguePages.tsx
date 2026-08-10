@@ -265,10 +265,10 @@ export function ModelsPage() {
                     <Field label="Context">{formatTokenLimit(model.max_context_tokens)}</Field>
                     <Field label="Max output">{formatTokenLimit(model.max_output_tokens)}</Field>
                     <Field label="Input price">
-                      {formatPrice(model.input_cost_per_million_tokens)}
+                      {formatPrice(model.input_cost_per_million_tokens, model.currency)}
                     </Field>
                     <Field label="Output price">
-                      {formatPrice(model.output_cost_per_million_tokens)}
+                      {formatPrice(model.output_cost_per_million_tokens, model.currency)}
                     </Field>
                   </dl>
                   <div className="mt-4">

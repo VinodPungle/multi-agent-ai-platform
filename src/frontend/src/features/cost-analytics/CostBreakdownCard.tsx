@@ -34,7 +34,15 @@ function share(row: CostBreakdown, total: number): number {
   return Math.min(100, (Number(row.usage.estimated_cost) / total) * 100);
 }
 
-function BreakdownRow({ row, total }: { row: CostBreakdown; total: number }) {
+function BreakdownRow({
+  row,
+  total,
+  currency,
+}: {
+  row: CostBreakdown;
+  total: number;
+  currency: string;
+}) {
   const percentage = share(row, total);
 
   return (
@@ -44,7 +52,7 @@ function BreakdownRow({ row, total }: { row: CostBreakdown; total: number }) {
           {row.key}
         </span>
         <span className="shrink-0 text-sm tabular-nums">
-          {formatCost(row.usage.estimated_cost)}
+          {formatCost(row.usage.estimated_cost, currency)}
         </span>
       </div>
 
@@ -99,7 +107,12 @@ export function CostBreakdownCard() {
             </h3>
             <ul className="flex flex-col gap-3">
               {data.summary[key].map((row) => (
-                <BreakdownRow key={row.key} row={row} total={total} />
+                <BreakdownRow
+                  key={row.key}
+                  row={row}
+                  total={total}
+                  currency={data.summary.currency}
+                />
               ))}
             </ul>
           </section>

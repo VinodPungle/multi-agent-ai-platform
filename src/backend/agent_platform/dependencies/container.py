@@ -146,6 +146,7 @@ def build_llm_providers(settings: PlatformSettings) -> tuple[LLMProvider, ...]:
                 max_output_tokens=azure.max_output_tokens,
                 input_cost_per_million_tokens=azure.input_cost_per_million_tokens,
                 output_cost_per_million_tokens=azure.output_cost_per_million_tokens,
+                pricing_currency=azure.pricing_currency,
                 supports_tools=azure.supports_tools,
                 output_token_parameter=azure.output_token_parameter,
             )
@@ -630,7 +631,14 @@ class ApplicationContainer(containers.DeclarativeContainer):
     #: In-process running totals, read by the analytics endpoint. Held as its own
     #: provider as well as inside the composite, because the endpoint needs to
     #: *query* it and the runtime only needs to write.
-    cost_analytics = providers.Singleton(InMemoryCostAnalytics)
+    cost_analytics = providers.Singleton(
+        InMemoryCostAnalytics,
+        # One currency per deployment. Taken from the priced provider because
+        # that is where rates are configured; the platform converts nowhere, so
+        # pricing two providers in different currencies would produce a total
+        # that means nothing.
+        currency=settings.provided.azure_foundry.pricing_currency,
+    )
 
     evaluation_provider = providers.Singleton(
         CompositeEvaluationProvider,

@@ -102,6 +102,7 @@ export const costBreakdownSchema = z.object({
 });
 
 export const costSummarySchema = z.object({
+  currency: z.string(),
   overall: usageTotalsSchema,
   by_model: z.array(costBreakdownSchema),
   by_provider: z.array(costBreakdownSchema),

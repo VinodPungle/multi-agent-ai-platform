@@ -46,21 +46,34 @@ export function useCostSummary(): UseQueryResult<CostSummaryResponse, ApiError> 
  * at the scale this panel usually shows. Above a pound the extra places are
  * noise.
  *
- * The currency symbol is the model's, and the platform prices in USD by
- * default; a multi-currency deployment would format from `ModelPricing.currency`
- * rather than hard-coding it here.
+ * The currency comes from the backend rather than being assumed. Rates are
+ * configured in whatever the subscription bills in — an INR figure rendered
+ * with a dollar sign understates the bill by an order of magnitude, which is
+ * exactly the kind of wrong that gets believed.
  */
-export function formatCost(value: string): string {
+export function formatCost(value: string, currency = 'USD'): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) {
     // The backend sent something unexpected. Showing it verbatim is more useful
     // than showing `NaN`, and more honest than showing zero.
     return value;
   }
-  if (amount === 0) {
-    return '$0.0000';
+  // `Intl` knows the right symbol, placement and grouping for each currency —
+  // ₹1,23,456.78 groups differently from $123,456.78, and hand-formatting gets
+  // that wrong for exactly the audience most likely to notice.
+  const digits = amount !== 0 && amount < 1 ? 4 : 2;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(amount);
+  } catch {
+    // An unrecognised code. Showing the amount beside the raw code beats
+    // throwing inside a render.
+    return `${amount.toFixed(digits)} ${currency}`;
   }
-  return amount < 1 ? `$${amount.toFixed(4)}` : `$${amount.toFixed(2)}`;
 }
 
 /** Format a token count with thousands separators. */

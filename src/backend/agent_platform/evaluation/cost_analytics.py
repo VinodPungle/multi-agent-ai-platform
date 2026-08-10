@@ -95,8 +95,16 @@ class InMemoryCostAnalytics:
     structurally — it inherits nothing, per ADR-0004.
     """
 
-    def __init__(self, provider_id: str = "cost-analytics") -> None:
+    def __init__(
+        self,
+        provider_id: str = "cost-analytics",
+        currency: str = "USD",
+    ) -> None:
         self._provider_id = provider_id
+        # One currency per deployment. Reported on the summary so a consumer
+        # renders the right symbol rather than assuming dollars — an INR figure
+        # shown as USD understates the bill by an order of magnitude.
+        self._currency = currency
         self._overall = _Totals()
         self._by_model: dict[str, _Totals] = defaultdict(_Totals)
         self._by_provider: dict[str, _Totals] = defaultdict(_Totals)
@@ -162,6 +170,7 @@ class InMemoryCostAnalytics:
         """
         async with self._lock:
             return CostSummary(
+                currency=self._currency,
                 overall=self._overall.to_usage(),
                 by_model=_breakdown(self._by_model),
                 by_provider=_breakdown(self._by_provider),

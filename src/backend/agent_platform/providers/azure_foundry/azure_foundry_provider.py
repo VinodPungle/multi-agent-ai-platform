@@ -113,6 +113,7 @@ class AzureFoundryProvider:
         max_output_tokens: int = 4_096,
         input_cost_per_million_tokens: Decimal = Decimal(0),
         output_cost_per_million_tokens: Decimal = Decimal(0),
+        pricing_currency: str = "USD",
         supports_tools: bool = True,
         # S107: "token" here is a model output-length parameter name, not a credential.
         output_token_parameter: str = "max_tokens",  # noqa: S107
@@ -154,6 +155,7 @@ class AzureFoundryProvider:
         self._max_output_tokens = max_output_tokens
         self._input_cost = input_cost_per_million_tokens
         self._output_cost = output_cost_per_million_tokens
+        self._pricing_currency = pricing_currency
         self._supports_tools = supports_tools
         self._output_token_parameter = output_token_parameter
         self._client = client
@@ -459,6 +461,11 @@ class AzureFoundryProvider:
                 pricing=ModelPricing(
                     input_cost_per_million_tokens=self._input_cost,
                     output_cost_per_million_tokens=self._output_cost,
+                    # Carried through rather than defaulted: the rates come from
+                    # a portal that quotes them in the subscription's billing
+                    # currency, and labelling INR as USD understates the bill by
+                    # an order of magnitude.
+                    currency=self._pricing_currency,
                 ),
             ),
         )
