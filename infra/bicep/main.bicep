@@ -125,6 +125,28 @@ param redisSkuCapacity int = 0
 @minValue(300)
 param redisTtlSeconds int = 86400
 
+// -----------------------------------------------------------------------------
+// Knowledge base (RAG)
+// -----------------------------------------------------------------------------
+// Off by default. Indexing costs money proportional to the corpus, and a
+// knowledge tool with no corpus would exist and always return nothing — which
+// teaches a model to stop calling it.
+
+@description('Index the documents in knowledge/ and register the knowledge-search tool.')
+param enableKnowledge bool = false
+
+@description('Provision an embedding deployment. GlobalStandard is pay-per-token with no idle cost, so this is far cheaper to leave provisioned than the chat model.')
+param provisionEmbeddings bool = false
+
+@description('Embedding model. 1536 dimensions for text-embedding-3-small.')
+param embeddingModelName string = 'text-embedding-3-small'
+
+@description('Vector length the embedding deployment emits. Must match the model: an index is built at one dimensionality and cannot accept another.')
+param embeddingDimensions int = 1536
+
+@description('Below this similarity a match counts as no match. Provider-specific: measured against text-embedding-3-small, genuine hits sit near 0.27 and an unanswerable question near 0.11, so 0.2 separates them. Meaningless for a different embedder.')
+param knowledgeMinimumScore string = '0.2'
+
 @description('What model routing optimises for among models that can serve a turn. Capability and context limits are constraints, not preferences, so this never causes a refusal. See ADR-0013.')
 @allowed(['balanced', 'lowest_cost', 'largest_context', 'highest_capability'])
 param routingObjective string = 'balanced'
@@ -305,6 +327,8 @@ module aiFoundry 'modules/ai-foundry.bicep' = if (provisionAiFoundry) {
     modelVersion: aiFoundryModelVersion
     deploymentSkuName: aiFoundryDeploymentSku
     deploymentCapacity: aiFoundryDeploymentCapacity
+    provisionEmbeddings: provisionEmbeddings
+    embeddingModelName: embeddingModelName
   }
 }
 
@@ -421,6 +445,23 @@ module backendApp 'modules/container-app.bicep' = {
       { name: 'PLATFORM_AZURE_FOUNDRY__DEPLOYMENT', value: aiFoundryDeploymentName }
       { name: 'PLATFORM_AZURE_FOUNDRY__MODEL_ID', value: platformModelId }
       { name: 'PLATFORM_ROUTING__OBJECTIVE', value: routingObjective }
+      // Knowledge base. The embedding provider follows the deployment: with one
+      // provisioned the platform uses it, otherwise it falls back to the local
+      // model, which is semantic and needs no cloud resource.
+      { name: 'PLATFORM_KNOWLEDGE__ENABLED', value: string(enableKnowledge) }
+      {
+        name: 'PLATFORM_KNOWLEDGE__EMBEDDING_PROVIDER'
+        value: provisionEmbeddings ? 'azure-foundry' : 'local'
+      }
+      {
+        name: 'PLATFORM_KNOWLEDGE__EMBEDDING_DEPLOYMENT'
+        value: provisionEmbeddings && provisionAiFoundry ? aiFoundry!.outputs.embeddingDeploymentName : ''
+      }
+      {
+        name: 'PLATFORM_KNOWLEDGE__EMBEDDING_DIMENSIONS'
+        value: string(provisionEmbeddings ? embeddingDimensions : 384)
+      }
+      { name: 'PLATFORM_KNOWLEDGE__MINIMUM_SCORE', value: provisionEmbeddings ? knowledgeMinimumScore : '0.0' }
       { name: 'PLATFORM_AGENT__PROVIDER_ID', value: effectiveProviderId }
       { name: 'PLATFORM_AGENT__MODEL_ID', value: effectiveModelId }
       // The mock answers with templated text. Configuration validation rejects

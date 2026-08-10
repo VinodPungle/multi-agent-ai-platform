@@ -221,6 +221,39 @@ a redeployment with the same name fails.
 
 ---
 
+## 8a. Knowledge base and embeddings
+
+`enableKnowledge` indexes the documents in `knowledge/` at startup and registers
+the `knowledge-search` tool. Off by default: with no corpus the tool would exist
+and always return nothing, which teaches a model to stop calling it.
+
+`provisionEmbeddings` adds a `text-embedding-3-small` deployment to the Foundry
+account. **GlobalStandard is pay-per-token with no idle cost**, unlike the chat
+model's provisioned SKU — so unlike Redis or provisioned inference, leaving this
+on costs nothing when nobody is asking questions.
+
+With it off, the platform falls back to a local ONNX model, which is also
+semantic and needs no cloud resource but downloads ~67 MB on first start.
+
+**`minimum_score` is the setting to get right, and it is embedder-specific.**
+Measured against this repository's own corpus:
+
+| Embedder | Genuine hits | Unanswerable question | Usable threshold |
+| --- | --- | --- | --- |
+| `hashing` | 0.30–0.47 | **0.48** | none — noise outscores real hits |
+| `local` | 0.52–0.65 | **0.52** | none — noise ties the best hit |
+| `azure-foundry` | 0.27–0.29 | **0.11** | ~0.20 |
+
+Only the Foundry model leaves a gap wide enough for a threshold to separate "the
+corpus has nothing on this" from "here is the least unlike text I could find".
+Measure against your own corpus before choosing — these numbers do not transfer.
+
+Note that Foundry's genuine hits score *lower* in absolute terms than the local
+model's. Similarity scores are not comparable between embedders, which is why
+the platform ships `0.0` rather than a number that would look authoritative.
+
+---
+
 ## 8b. Cost visibility
 
 `GET /api/v1/analytics/costs` reports token usage, estimated cost, failure

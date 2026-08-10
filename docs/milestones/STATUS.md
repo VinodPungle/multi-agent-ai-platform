@@ -1484,7 +1484,64 @@ model decides when documents are needed, an agent that must not see internal
 documents simply does not list it, and the query is visible because the model
 formulated it.
 
-### Live verification
+### Live verification: all three embedders, same corpus, same questions
+
+`text-embedding-3-small` was deployed to the Foundry resource at GlobalStandard
+(pay-per-token, no idle cost) and the provider made its first real call:
+1536 dimensions, related text scoring 0.646 against unrelated text at 0.096.
+
+Retrieval over the repository's own corpus, with deliberately paraphrased
+questions:
+
+| Embedder | Correct | Irrelevant query scores | Usable threshold? |
+| --- | --- | --- | --- |
+| hashing (lexical, 256d) | 1/3 | **0.476** | **No** — noise outscores two genuine hits |
+| local (semantic, 384d) | 2/3 | **0.520** | **No** — noise ties the best genuine hit |
+| azure-foundry (semantic, 1536d) | 2/3 | **0.108** | **Yes** — hits at 0.27–0.29, ~2.5× clear |
+
+**The threshold column is the finding worth keeping.** Retrieval accuracy
+separates the three modestly; their ability to say *"the corpus has nothing on
+this"* separates them completely. With the lexical embedder the signal is
+inverted — an unanswerable question scores higher than two real answers, so no
+`minimum_score` exists that would help. Only the Foundry model leaves a gap wide
+enough for the setting to do its job.
+
+That also demonstrates, with numbers, the claim ADR-0015 makes about score
+semantics being provider-specific: Foundry's genuine hits sit near 0.27 while
+the local model's sit near 0.60. A threshold tuned against one is meaningless
+against the other, which is why the default is 0 rather than a number that would
+look authoritative.
+
+**One "miss" was my test's fault, not the retrieval's.** Both semantic models
+answered "what happens to chat history if a box dies?" with `cost-controls.md`
+rather than `platform-overview.md` — and `cost-controls.md` has a *"Conversation
+memory"* section discussing exactly that. The expected answer in the comparison
+was wrong; the retrieval was right.
+
+### Live verification: the threshold doing its job
+
+The whole platform on Foundry embeddings with `minimum_score = 0.2`, through the
+real tool executor:
+
+```
+embeddings : azure-foundry-embeddings
+vectors    : 6
+
+q: how do I stop the bill getting out of hand?
+   passages: 1
+     [0.269] cost-controls.md
+
+q: what is the aubergine harvest forecast for Kent
+   passages: 0
+     -> correctly reported as 'nothing in the corpus'
+```
+
+The second result is the point. Before the threshold had an embedder with enough
+headroom to use, that question returned the nearest available text and invited a
+confident answer grounded in it. It now returns nothing, which the tool reports
+as a success with no passages — an answer the model can act on honestly.
+
+### Live verification: the tool
 
 The repository's own corpus, indexed at startup and queried through the tool
 executor:
@@ -1527,11 +1584,8 @@ number that would look authoritative.
 3. **The vector store is neither durable nor shared.** Rebuilt on every start,
    one copy per replica. The same trajectory memory took, and the same kind of
    change to fix.
-4. **No Azure AI Search implementation, and the Foundry embedding provider is
-   still unverified against a live endpoint.** No embedding deployment exists
-   on the Foundry resource — creating one was blocked by the permission system.
-   The code was written by introspecting the installed SDK rather than from
-   memory, but it has not made a real call.
+4. **No Azure AI Search implementation.** The vector store is still
+   in-process. The *embedding* provider is now verified live — see below.
 5. **Text formats only.** PDF and DOCX need a parser, and a bad parser loses
    structure invisibly.
 6. **No reranking, hybrid search or query rewriting.** Each is a real

@@ -59,6 +59,24 @@ param deploymentCapacity int
 @description('Content filter policy applied to the deployment.')
 param raiPolicyName string = 'Microsoft.DefaultV2'
 
+@description('Deploy an embedding model for retrieval-augmented generation. Separate from the chat deployment because it is a different model with a different billing shape.')
+param provisionEmbeddings bool = false
+
+@description('Embedding deployment name. This is what the application invokes.')
+param embeddingDeploymentName string = 'text-embedding-3-small'
+
+@description('Embedding model name.')
+param embeddingModelName string = 'text-embedding-3-small'
+
+@description('Embedding model version. Pinned, like the chat model.')
+param embeddingModelVersion string = '1'
+
+@description('Embedding SKU. GlobalStandard is pay-per-token with no idle cost, unlike provisioned throughput.')
+param embeddingSkuName string = 'GlobalStandard'
+
+@description('Tokens-per-minute capacity, in thousands. Indexing is bursty; a low limit throttles a corpus rebuild rather than costing less.')
+param embeddingCapacity int = 50
+
 // Built-in role. Data-plane inference only — deliberately not "Cognitive
 // Services Contributor", which would also permit creating and deleting
 // deployments. The workload needs to call the model, not manage it.
@@ -110,6 +128,32 @@ resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
   }
 }
 
+// Embeddings. A second deployment rather than a second account: it shares the
+// endpoint, the credential and the role assignment below, so the platform needs
+// no additional configuration to reach it.
+//
+// `dependsOn` is explicit because two deployments on one account cannot be
+// created in parallel — the service rejects the second with a conflict, and the
+// implicit dependency graph has no reason to order them.
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = if (provisionEmbeddings) {
+  parent: account
+  name: embeddingDeploymentName
+  sku: {
+    name: embeddingSkuName
+    capacity: embeddingCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: embeddingModelName
+      version: embeddingModelVersion
+    }
+    raiPolicyName: raiPolicyName
+    versionUpgradeOption: 'NoAutoUpgrade'
+  }
+  dependsOn: [deployment]
+}
+
 resource inferenceAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: account
   // Deterministic, so re-running the deployment updates the assignment rather
@@ -136,3 +180,6 @@ output inferenceEndpoint string = '${account.properties.endpoint}models'
 
 @description('Deployment name the application invokes.')
 output deploymentName string = deployment.name
+
+@description('Embedding deployment name, empty when none was provisioned.')
+output embeddingDeploymentName string = provisionEmbeddings ? embeddingDeploymentName : ''
