@@ -12,7 +12,7 @@ dependencies = [
     "agent-platform-shared",
     # Presentation layer
     "fastapi>=0.115.6",
-    "uvicorn[standard]>=0.34.0",
+    "uvicorn[standard]>=0.52.3",
     # Configuration — strongly typed, validated at startup
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
