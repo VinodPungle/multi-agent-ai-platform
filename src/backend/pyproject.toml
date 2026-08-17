@@ -20,7 +20,7 @@ dependencies = [
     "dependency-injector>=4.44.0",
     # Workflow orchestration. Kept behind `WorkflowEngine` so the graph library
     # is replaceable — see ADR-0009.
-    "langgraph>=0.2.60",
+    "langgraph>=1.2.11",
     # Prompt asset front matter. Prompts are versioned files with YAML metadata.
     "pyyaml>=6.0.2",
     # Outbound HTTP for search providers. Async, and the same client the test

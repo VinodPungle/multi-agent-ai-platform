@@ -34,11 +34,11 @@ dev = [
     # Required by starlette.testclient from Starlette 1.x onward; the older
     # `httpx` backend is deprecated there and emits a warning that `pytest`'s
     # `filterwarnings = error` turns into a collection failure.
-    "httpx2>=0.1.0",
+    "httpx2>=2.10.0",
     "mypy>=1.14.0",
     # Managed as a project dependency rather than installed globally, so every
     # contributor and CI run the same hook framework version.
-    "pre-commit>=4.0.0",
+    "pre-commit>=4.6.2",
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=6.0.0",
